@@ -1,3 +1,5 @@
+pub(crate) mod raw_responses;
+pub(crate) use raw_responses::raw_response_stream;
 pub(crate) mod responses;
 mod responses_error;
 

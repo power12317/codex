@@ -120,6 +120,27 @@ impl<T: HttpTransport> ResponsesClient<T> {
             .await
     }
 
+    /// Single Responses request with lossless events and no stream idle deadline.
+    /// Dropping the receiver cancels parsing and releases the upstream body.
+    pub async fn stream_raw(
+        &self,
+        body: Value,
+        headers: HeaderMap,
+    ) -> Result<crate::RawResponseStream, ApiError> {
+        let body = EncodedJsonBody::encode(&body)
+            .map_err(|_| ApiError::Stream("invalid Responses request".into()))?;
+        let response = self
+            .session
+            .stream_encoded_json_with(Method::POST, "/responses", headers, Some(body), |req| {
+                req.headers.insert(
+                    http::header::ACCEPT,
+                    HeaderValue::from_static("text/event-stream"),
+                );
+            })
+            .await?;
+        Ok(crate::sse::raw_response_stream(response))
+    }
+
     async fn stream_encoded(
         &self,
         body: EncodedJsonBody,

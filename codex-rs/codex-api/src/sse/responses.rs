@@ -89,9 +89,10 @@ pub fn spawn_response_stream(
         process_sse_with_treatment(
             stream_response.bytes,
             tx_event,
-            idle_timeout,
+            Some(idle_timeout),
             telemetry,
             safety_buffering_treatment,
+            /*raw_events*/ None,
         )
         .await;
     });
@@ -453,7 +454,7 @@ pub fn process_responses_event(
                     }
                     Err(err) => {
                         let error = format!("failed to parse ResponseCompleted: {err}");
-                        debug!("{error}");
+                        debug!(error_category = ?err.classify(), "failed to parse ResponseCompleted");
                         return Err(ResponsesEventError::Api(ApiError::Stream(error)));
                     }
                 }
@@ -511,19 +512,23 @@ pub async fn process_sse(
     process_sse_with_treatment(
         stream,
         tx_event,
-        idle_timeout,
+        Some(idle_timeout),
         telemetry,
         SafetyBufferingTreatment::default(),
+        /*raw_events*/ None,
     )
     .await;
 }
 
-async fn process_sse_with_treatment(
+// Keep lossless forwarding in this shared loop so upstream parsing and buffering changes
+// cannot silently diverge between the agent and inference-only callers.
+pub(super) async fn process_sse_with_treatment(
     stream: ByteStream,
     tx_event: mpsc::Sender<Result<ResponseEvent, ApiError>>,
-    idle_timeout: Duration,
+    idle_timeout: Option<Duration>,
     telemetry: Option<Arc<dyn SseTelemetry>>,
     safety_buffering_treatment: SafetyBufferingTreatment,
+    raw_events: Option<mpsc::Sender<Result<Value, ApiError>>>,
 ) {
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
@@ -534,7 +539,18 @@ async fn process_sse_with_treatment(
         let response = tokio::select! {
             biased;
             _ = tx_event.closed() => return,
-            response = timeout(idle_timeout, stream.next()) => response,
+            _ = async {
+                match &raw_events {
+                    Some(sender) => sender.closed().await,
+                    None => std::future::pending().await,
+                }
+            } => return,
+            response = async {
+                match idle_timeout {
+                    Some(duration) => timeout(duration, stream.next()).await,
+                    None => Ok(stream.next().await),
+                }
+            } => response,
         };
         if let Some(t) = telemetry.as_ref() {
             t.on_sse_poll(&response, start.elapsed());
@@ -542,7 +558,9 @@ async fn process_sse_with_treatment(
         let sse = match response {
             Ok(Some(Ok(sse))) => sse,
             Ok(Some(Err(e))) => {
-                debug!("SSE Error: {e:#}");
+                if raw_events.is_none() {
+                    debug!("SSE Error: {e:#}");
+                }
                 let error = match e {
                     eventsource_stream::EventStreamError::Transport(
                         error @ codex_client::TransportError::Policy(_),
@@ -567,11 +585,50 @@ async fn process_sse_with_treatment(
             }
         };
 
-        trace!("SSE event: {}", &sse.data);
+        if raw_events.is_none() {
+            trace!("SSE event: {}", &sse.data);
+        }
+        let raw = if raw_events.is_some() {
+            match serde_json::from_str::<Value>(&sse.data) {
+                Ok(value) => Some(value),
+                Err(_) => {
+                    let _ = tx_event
+                        .send(Err(ApiError::Stream("invalid Responses JSON".into())))
+                        .await;
+                    return;
+                }
+            }
+        } else {
+            None
+        };
 
         let event: ResponsesStreamEvent = match serde_json::from_str(&sse.data) {
             Ok(event) => event,
             Err(e) => {
+                if let (Some(sender), Some(raw)) = (&raw_events, &raw) {
+                    let kind = raw.get("type").and_then(Value::as_str);
+                    if kind.is_none() {
+                        let _ = tx_event
+                            .send(Err(ApiError::Stream("Responses event has no type".into())))
+                            .await;
+                        return;
+                    }
+                    if sender.send(Ok(raw.clone())).await.is_err() {
+                        return;
+                    }
+                    if matches!(
+                        kind,
+                        Some(
+                            "response.completed"
+                                | "response.incomplete"
+                                | "response.failed"
+                                | "error"
+                        )
+                    ) {
+                        return;
+                    }
+                    continue;
+                }
                 debug!(
                     error_category = ?e.classify(),
                     error_line = e.line(),
@@ -623,7 +680,24 @@ async fn process_sse_with_treatment(
             return;
         }
 
-        match process_responses_event(event) {
+        let raw_terminal = raw.as_ref().is_some_and(|value| {
+            matches!(
+                value["type"].as_str(),
+                Some("response.completed" | "response.incomplete" | "response.failed" | "error")
+            )
+        });
+        let processed = process_responses_event(event);
+        if let (Some(sender), Some(raw)) = (&raw_events, raw)
+            && sender.send(Ok(raw)).await.is_err()
+        {
+            return;
+        }
+        // The bridge preserves terminal Responses errors/incomplete details verbatim.
+        // They are terminal protocol events, not a reason to run another model turn.
+        if raw_terminal {
+            return;
+        }
+        match processed {
             Ok(Some(event)) => {
                 let is_completed = matches!(event, ResponseEvent::Completed { .. });
                 if tx_event.send(Ok(event)).await.is_err() {
