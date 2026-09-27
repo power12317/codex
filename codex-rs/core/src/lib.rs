@@ -223,6 +223,7 @@ pub use client::ModelClientSession;
 pub use client::X_CODEX_INSTALLATION_ID_HEADER;
 pub use client::X_CODEX_ROUTING_HINT_HEADER;
 pub use client::X_CODEX_TURN_METADATA_HEADER;
+pub use client::prepare_inference_request;
 pub use client_common::Prompt;
 pub use client_common::ResponseEvent;
 pub use client_common::ResponseStream;

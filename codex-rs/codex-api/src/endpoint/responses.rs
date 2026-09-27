@@ -141,6 +141,37 @@ impl<T: HttpTransport> ResponsesClient<T> {
         Ok(crate::sse::raw_response_stream(response))
     }
 
+    /// Send a prepared Responses request and return the original HTTP byte stream.
+    /// This boundary does not parse SSE or interpret model output.
+    pub async fn stream_prepared_body(
+        &self,
+        body: Value,
+        options: ResponsesOptions,
+    ) -> Result<codex_client::StreamResponse, ApiError> {
+        let body =
+            EncodedJsonBody::encode(&body).map_err(|error| ApiError::Stream(error.to_string()))?;
+        let mut headers = options.extra_headers;
+        if let Some(ref thread_id) = options.thread_id {
+            insert_header(&mut headers, "x-client-request-id", thread_id);
+        }
+        headers.extend(build_session_headers(options.session_id, options.thread_id));
+        if let Some(subagent) = subagent_header(&options.session_source) {
+            insert_header(&mut headers, "x-openai-subagent", &subagent);
+        }
+        self.session
+            .stream_encoded_json_with(Method::POST, "/responses", headers, Some(body), |request| {
+                request.compression = match options.compression {
+                    Compression::None => RequestCompression::None,
+                    Compression::Zstd => RequestCompression::Zstd,
+                };
+                request.headers.insert(
+                    http::header::ACCEPT,
+                    HeaderValue::from_static("text/event-stream"),
+                );
+            })
+            .await
+    }
+
     async fn stream_encoded(
         &self,
         body: EncodedJsonBody,
