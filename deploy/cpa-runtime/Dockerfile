@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /src
 COPY . .
 WORKDIR /src/codex-rs
-ENV CARGO_INCREMENTAL=0 CARGO_PROFILE_RELEASE_DEBUG=0
+ENV CARGO_INCREMENTAL=0 CARGO_PROFILE_RELEASE_DEBUG=0 CARGO_BUILD_JOBS=2
 # Keep the official CLI login and local runtime companions available. The CPA
 # inference path does not call these execution components.
 RUN target="$(rustc -vV | sed -n 's/^host: //p')" \
