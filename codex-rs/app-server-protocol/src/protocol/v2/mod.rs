@@ -1,3 +1,5 @@
+mod cpa;
+pub use cpa::*;
 mod shared;
 
 mod account;

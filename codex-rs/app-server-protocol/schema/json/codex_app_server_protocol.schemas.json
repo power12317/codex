@@ -4623,6 +4623,66 @@
           "properties": {
             "method": {
               "enum": [
+                "cpa/inference/event"
+              ],
+              "title": "Cpa/inference/eventNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/CpaInferenceEventNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Cpa/inference/eventNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "cpa/inference/completed"
+              ],
+              "title": "Cpa/inference/completedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/CpaInferenceCompletedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Cpa/inference/completedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "cpa/inference/error"
+              ],
+              "title": "Cpa/inference/errorNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/CpaInferenceErrorNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Cpa/inference/errorNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/started"
               ],
               "title": "Thread/startedNotificationMethod",
@@ -10688,6 +10748,60 @@
           "assistant"
         ],
         "type": "string"
+      },
+      "CpaInferenceCompletedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId"
+        ],
+        "title": "CpaInferenceCompletedNotification",
+        "type": "object"
+      },
+      "CpaInferenceErrorNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "httpStatus": {
+            "format": "uint16",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "httpStatus",
+          "message",
+          "requestId"
+        ],
+        "title": "CpaInferenceErrorNotification",
+        "type": "object"
+      },
+      "CpaInferenceEventNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "event": true,
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event",
+          "requestId"
+        ],
+        "title": "CpaInferenceEventNotification",
+        "type": "object"
       },
       "CreditsSnapshot": {
         "properties": {

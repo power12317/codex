@@ -496,6 +496,25 @@ enum GetAccountRateLimitsParamsTypeScript {
 }
 
 client_request_definitions! {
+    #[experimental("cpa/capabilities/read")]
+    CpaCapabilitiesRead => "cpa/capabilities/read" {
+        params: v2::CpaCapabilitiesReadParams,
+        serialization: None,
+        response: v2::CpaCapabilitiesReadResponse,
+    },
+    #[experimental("cpa/inference/start")]
+    CpaInferenceStart => "cpa/inference/start" {
+        params: v2::CpaInferenceStartParams,
+        serialization: None,
+        response: v2::CpaInferenceStartResponse,
+    },
+    #[experimental("cpa/inference/cancel")]
+    CpaInferenceCancel => "cpa/inference/cancel" {
+        params: v2::CpaInferenceCancelParams,
+        serialization: None,
+        response: v2::CpaInferenceCancelResponse,
+    },
+
     Initialize => "initialize" {
         params: v1::InitializeParams,
         serialization: None,
@@ -1916,6 +1935,12 @@ pub struct FuzzyFileSearchSessionCompletedNotification {
 server_notification_definitions! {
     /// NEW NOTIFICATIONS
     Error => "error" (v2::ErrorNotification),
+    #[experimental("cpa/inference/event")]
+    CpaInferenceEvent => "cpa/inference/event" (v2::CpaInferenceEventNotification),
+    #[experimental("cpa/inference/completed")]
+    CpaInferenceCompleted => "cpa/inference/completed" (v2::CpaInferenceCompletedNotification),
+    #[experimental("cpa/inference/error")]
+    CpaInferenceError => "cpa/inference/error" (v2::CpaInferenceErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
     ThreadStatusChanged => "thread/status/changed" (v2::ThreadStatusChangedNotification),
     ThreadArchived => "thread/archived" (v2::ThreadArchivedNotification),

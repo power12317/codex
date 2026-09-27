@@ -109,8 +109,18 @@ const CONNECTION_RPC_DRAIN_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 30);
 fn deserialize_client_request(request: JSONRPCRequest) -> Result<ClientRequest, JSONRPCErrorError> {
     reject_obsolete_request_fields(&request)?;
 
-    ClientRequest::try_from(request)
-        .map_err(|err| invalid_request(format!("Invalid request: {err}")))
+    let cpa = request.method.starts_with("cpa/");
+    ClientRequest::try_from(request).map_err(|err| {
+        if cpa {
+            JSONRPCErrorError {
+                code: -32602,
+                message: "Invalid CPA request".into(),
+                data: Some(serde_json::json!({"httpStatus": 400})),
+            }
+        } else {
+            invalid_request(format!("Invalid request: {err}"))
+        }
+    })
 }
 
 fn reject_obsolete_request_fields(request: &JSONRPCRequest) -> Result<(), JSONRPCErrorError> {
@@ -138,6 +148,7 @@ fn reject_removed_permission_profile(request: &JSONRPCRequest) -> Result<(), JSO
 }
 
 pub(crate) struct MessageProcessor {
+    cpa_bridge: Arc<crate::cpa_bridge::CpaBridge>,
     pub(crate) turn_admission: TurnAdmission,
     user_verification: Arc<crate::user_verification::Service>,
     outgoing: Arc<OutgoingMessageSender>,
@@ -359,7 +370,7 @@ impl MessageProcessor {
                 codex_core::passthrough_image_store(),
                 Arc::clone(&thread_store),
                 codex_core::local_agent_graph_store_from_state_db(state_db.as_ref()),
-                installation_id,
+                installation_id.clone(),
                 Some(app_server_attestation_provider(
                     outgoing.clone(),
                     thread_state_manager.clone(),
@@ -524,6 +535,12 @@ impl MessageProcessor {
             turn_cost_worker.as_ref().map(TurnCostWorker::handle),
             config_warnings,
         );
+        let cpa_bridge = crate::cpa_bridge::CpaBridge::new(
+            config.clone(),
+            auth_manager.clone(),
+            installation_id,
+            outgoing.clone(),
+        );
         let turn_processor = TurnRequestProcessor::new(
             auth_manager,
             Arc::clone(&thread_manager),
@@ -582,6 +599,7 @@ impl MessageProcessor {
         );
 
         Self {
+            cpa_bridge,
             turn_admission,
             user_verification,
             outgoing,
@@ -629,6 +647,26 @@ impl MessageProcessor {
         transport: &AppServerTransport,
         session: Arc<ConnectionSessionState>,
     ) {
+        if request.method.starts_with("cpa/")
+            && (!self.cpa_bridge.enabled()
+                || !matches!(transport, AppServerTransport::UnixSocket { .. }))
+        {
+            self.outgoing
+                .send_error(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id: request.id,
+                    },
+                    JSONRPCErrorError {
+                        code: -32601,
+                        message: "CPA integration is unavailable on this transport".into(),
+                        data: Some(serde_json::json!({"httpStatus": 404})),
+                    },
+                )
+                .await;
+            return;
+        }
+        let cpa = request.method.starts_with("cpa/");
         let request_method = request.method.as_str();
         tracing::trace!(
             ?connection_id,
@@ -673,7 +711,10 @@ impl MessageProcessor {
                     }
                     Err(error) => Err(error),
                 };
-                if let Err(error) = result {
+                if let Err(mut error) = result {
+                    if cpa && error.data.is_none() {
+                        error.data = Some(serde_json::json!({"httpStatus": 400}));
+                    }
                     self.outgoing.send_error(request_id.clone(), error).await;
                 }
             },
@@ -866,6 +907,7 @@ impl MessageProcessor {
         connection_id: ConnectionId,
         session_state: &ConnectionSessionState,
     ) {
+        self.cpa_bridge.disconnect(connection_id);
         session_state.rpc_gate.close().await;
         self.account_processor
             .gateway_connection_closed(connection_id);
@@ -887,6 +929,8 @@ impl MessageProcessor {
                 "timed out waiting for connection RPCs to drain"
             );
         }
+        // A previously admitted start can register while the RPC gate is draining.
+        self.cpa_bridge.disconnect(connection_id);
         self.outgoing.connection_closed(connection_id).await;
         self.fs_processor.connection_closed(connection_id).await;
         self.command_exec_processor
@@ -1079,6 +1123,17 @@ impl MessageProcessor {
             ClientRequest::Initialize { .. } => {
                 panic!("Initialize should be handled before initialized request dispatch");
             }
+            ClientRequest::CpaCapabilitiesRead { .. } => {
+                self.cpa_bridge.capabilities().map(|r| Some(r.into()))
+            }
+            ClientRequest::CpaInferenceCancel { params, .. } => self
+                .cpa_bridge
+                .cancel(connection_id, params)
+                .map(|r| Some(r.into())),
+            ClientRequest::CpaInferenceStart { params, .. } => self
+                .cpa_bridge
+                .start(request_id.clone(), params)
+                .map(|()| None),
             ClientRequest::UserVerificationCancel { params, .. } => {
                 self.outgoing
                     .cancel_user_verification_request(&ConnectionRequestId {

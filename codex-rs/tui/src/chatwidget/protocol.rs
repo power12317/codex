@@ -342,6 +342,9 @@ impl ChatWidget {
             }
             ServerNotification::ServerRequestResolved(_)
             | ServerNotification::AccountUpdated(_)
+            | ServerNotification::CpaInferenceEvent(_)
+            | ServerNotification::CpaInferenceCompleted(_)
+            | ServerNotification::CpaInferenceError(_)
             | ServerNotification::GatewayOAuthChanged(_)
             | ServerNotification::AccountRateLimitsUpdated(_)
             | ServerNotification::ThreadStarted(_)

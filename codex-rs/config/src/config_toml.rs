@@ -163,6 +163,8 @@ pub struct FeatureToggleToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ConfigToml {
+    /// Explicit local CPA integration configuration; disabled by default.
+    pub cpa_bridge: Option<CpaBridgeToml>,
     /// Optional override of model selection.
     pub model: Option<String>,
     /// Review model override used by the `/review` feature.
@@ -1074,4 +1076,13 @@ command = "   "
             )
         );
     }
+}
+
+/// Local inference-only CPA bridge identity. Credentials remain owned by AuthManager.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CpaBridgeToml {
+    #[serde(default)]
+    pub enabled: bool,
+    pub credential_id: String,
 }

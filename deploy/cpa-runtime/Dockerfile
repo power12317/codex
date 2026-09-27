@@ -1,0 +1,41 @@
+# syntax=docker/dockerfile:1
+# Override both image arguments with immutable digests for a deployment build.
+ARG RUST_IMAGE=rust:1.95.0-bookworm
+ARG RUNTIME_IMAGE=debian:bookworm-slim
+FROM ${RUST_IMAGE} AS build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 clang cmake pkg-config libssl-dev libasound2-dev libudev-dev protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY . .
+WORKDIR /src/codex-rs
+ENV CARGO_INCREMENTAL=0 CARGO_PROFILE_RELEASE_DEBUG=0
+# Keep the official CLI login and local runtime companions available. The CPA
+# inference path does not call these execution components.
+RUN target="$(rustc -vV | sed -n 's/^host: //p')" \
+    && python3 /src/deploy/cpa-runtime/fetch-v8.py --target "$target" --output-dir /opt/rusty-v8 \
+    && RUSTY_V8_ARCHIVE="/opt/rusty-v8/librusty_v8_ptrcomp_sandbox_release_${target}.a.gz" \
+       RUSTY_V8_SRC_BINDING_PATH="/opt/rusty-v8/src_binding_ptrcomp_sandbox_release_${target}.rs" \
+       cargo build --locked --release \
+    -p codex-cli --bin codex \
+    -p codex-app-server --bin codex-app-server --bin exec-server \
+    -p codex-code-mode-host --bin codex-code-mode-host
+RUN mkdir /out && cp target/release/codex target/release/codex-app-server \
+    target/release/exec-server target/release/codex-code-mode-host /out/
+
+FROM ${RUNTIME_IMAGE}
+ARG FORK_REVISION=unrecorded-local-build
+LABEL org.opencontainers.image.revision=${FORK_REVISION} \
+    io.codex.cpa.protocol-version="1" \
+    io.codex.cpa.upstream-revision="985cf47a4eb6084b2ff6b30ebdb1216acda85bb4"
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates libssl3 libasound2 libudev1 git ripgrep bash \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --uid 10001 --create-home codex \
+    && install -d -o codex -g codex -m 0700 /var/lib/codex /run/codex
+COPY --from=build /out/ /usr/local/bin/
+ENV CODEX_HOME=/var/lib/codex
+USER codex
+WORKDIR /home/codex
+ENTRYPOINT ["/usr/local/bin/codex-app-server"]
+CMD ["--listen", "unix:///run/codex/cpa.sock"]

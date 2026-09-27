@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "event": true,
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "event",
+    "requestId"
+  ],
+  "title": "CpaInferenceEventNotification",
+  "type": "object"
+}

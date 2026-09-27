@@ -106,6 +106,7 @@ mod config_manager;
 mod config_manager_service;
 mod connection_cleanup;
 mod connection_rpc_gate;
+mod cpa_bridge;
 mod current_time;
 mod daemon_thread_recovery;
 mod dynamic_tools;
