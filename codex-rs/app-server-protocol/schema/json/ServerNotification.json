@@ -1132,6 +1132,24 @@
     "CpaInferenceErrorNotification": {
       "additionalProperties": false,
       "properties": {
+        "body": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "headers": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "httpStatus": {
           "format": "uint16",
           "minimum": 0.0,
@@ -1164,6 +1182,153 @@
         "requestId"
       ],
       "type": "object"
+    },
+    "CpaInferenceUpstreamNotification": {
+      "description": "Actual inference transport exchanges, including attempts made during auth recovery.",
+      "oneOf": [
+        {
+          "properties": {
+            "access_token_sha256": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "body": {
+              "type": "string"
+            },
+            "headers": {
+              "additionalProperties": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": "object"
+            },
+            "kind": {
+              "enum": [
+                "request"
+              ],
+              "type": "string"
+            },
+            "method": {
+              "type": "string"
+            },
+            "oaiLbNode": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "body",
+            "headers",
+            "kind",
+            "method",
+            "request_id",
+            "url"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "body": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "headers": {
+              "additionalProperties": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": "object"
+            },
+            "kind": {
+              "enum": [
+                "response"
+              ],
+              "type": "string"
+            },
+            "oaiLbNode": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "status_code": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "headers",
+            "kind",
+            "request_id",
+            "status_code"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "body_base64": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "body"
+              ],
+              "type": "string"
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "body_base64",
+            "kind",
+            "request_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "error"
+              ],
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "message",
+            "request_id"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "CreditsSnapshot": {
       "properties": {
@@ -6971,6 +7136,26 @@
         "params"
       ],
       "title": "ErrorNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "cpa/inference/upstream"
+          ],
+          "title": "Cpa/inference/upstreamNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/CpaInferenceUpstreamNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Cpa/inference/upstreamNotification",
       "type": "object"
     },
     {

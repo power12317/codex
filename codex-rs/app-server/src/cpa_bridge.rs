@@ -1,5 +1,6 @@
 //! CPA IPC v2 boundary. This module deliberately has no ThreadManager or tool runtime.
 mod login;
+mod upstream;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
@@ -106,6 +107,8 @@ impl CpaBridge {
                 .and_then(|file| file.read().ok())
                 .and_then(|value| value["codex_cli"]["owner"].as_str().map(str::to_owned)),
             manual_oauth: true,
+            upstream_logs: true,
+            upstream_body_logs: true,
             runtime_version: env!("CARGO_PKG_VERSION").into(),
             upstream_revision: UPSTREAM.into(),
             credential_id,
@@ -203,6 +206,13 @@ impl CpaBridge {
                                     .and_then(|d| d["httpStatus"].as_u64())
                                     .unwrap_or(502)
                                     as u16,
+                                body: error
+                                    .data
+                                    .as_ref()
+                                    .and_then(|data| data["body"].as_str().map(str::to_owned)),
+                                headers: error.data.as_ref().and_then(|data| {
+                                    serde_json::from_value(data["headers"].clone()).ok()
+                                }),
                                 message: error.message,
                             }),
                         )
@@ -246,7 +256,11 @@ impl CpaBridge {
         Ok(auth)
     }
 
-    async fn open(&self, params: &CpaInferenceStartParams) -> BridgeResult<RawResponseStream> {
+    async fn open(
+        &self,
+        id: &ConnectionRequestId,
+        params: &CpaInferenceStartParams,
+    ) -> BridgeResult<RawResponseStream> {
         // Only AuthManager acquires/refreshes credentials. No tokens cross IPC.
         let (auth, factory) = tokio::time::timeout(
             Duration::from_secs(/*secs*/ 30),
@@ -296,7 +310,6 @@ impl CpaBridge {
         // RetryPolicy counts retries after the initial attempt. Zero means one POST.
         provider.retry.max_attempts = 0;
         let client = HttpClientBuilder::new()
-            .default_headers(codex_login::default_client::default_headers())
             .with_chatgpt_cloudflare_cookie_store()
             .without_request_logging()
             .without_redirects()
@@ -322,7 +335,13 @@ impl CpaBridge {
                 .map_err(|_| failure(/*status*/ 500, "Invalid installation identity"))?,
         );
         ResponsesClient::new(
-            ReqwestTransport::from_http_client(client),
+            upstream::UpstreamTransport {
+                inner: ReqwestTransport::from_http_client(client),
+                factory,
+                outgoing: self.outgoing.clone(),
+                connection_id: id.connection_id,
+                request_id: params.request_id.clone(),
+            },
             provider,
             auth_provider_from_auth(&auth),
         )
@@ -339,7 +358,7 @@ impl CpaBridge {
     ) -> BridgeResult<()> {
         let mut recovery = self.auth.unauthorized_recovery();
         let mut stream = loop {
-            match self.open(params).await {
+            match self.open(id, params).await {
                 Ok(stream) => break stream,
                 Err(error)
                     if error.data.as_ref().is_some_and(|d| d["httpStatus"] == 401)
@@ -453,6 +472,21 @@ fn failure(status: u16, message: &str) -> JSONRPCErrorError {
 }
 
 fn api_failure(error: ApiError) -> JSONRPCErrorError {
+    if let ApiError::Transport(TransportError::Http {
+        status,
+        headers,
+        body,
+        ..
+    }) = error
+    {
+        return JSONRPCErrorError {
+            code: -32000,
+            message: "Upstream inference failed".into(),
+            data: Some(
+                json!({"httpStatus":status.as_u16(),"body":body,"headers":headers.as_ref().map(upstream::log_headers)}),
+            ),
+        };
+    }
     let (status, message) = match error {
         ApiError::Transport(TransportError::Http { status, .. }) | ApiError::Api { status, .. } => {
             (status.as_u16(), "Upstream inference failed")

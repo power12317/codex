@@ -121,6 +121,7 @@ export type { ContextCompactedNotification } from "./ContextCompactedNotificatio
 export type { CpaInferenceCompletedNotification } from "./CpaInferenceCompletedNotification";
 export type { CpaInferenceErrorNotification } from "./CpaInferenceErrorNotification";
 export type { CpaInferenceEventNotification } from "./CpaInferenceEventNotification";
+export type { CpaInferenceUpstreamNotification } from "./CpaInferenceUpstreamNotification";
 export type { CreditsSnapshot } from "./CreditsSnapshot";
 export type { CyberAccessProgram } from "./CyberAccessProgram";
 export type { DeprecationNoticeNotification } from "./DeprecationNoticeNotification";

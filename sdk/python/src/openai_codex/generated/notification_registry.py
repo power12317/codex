@@ -20,6 +20,7 @@ from .v2_all import ContextCompactedNotification
 from .v2_all import CpaInferenceCompletedNotification
 from .v2_all import CpaInferenceErrorNotification
 from .v2_all import CpaInferenceEventNotification
+from .v2_all import CpaInferenceUpstreamNotification
 from .v2_all import DeprecationNoticeNotification
 from .v2_all import EnvironmentConnectionNotification
 from .v2_all import ErrorNotification
@@ -106,6 +107,7 @@ KnownNotificationPayload: TypeAlias = (
     | CpaInferenceCompletedNotification
     | CpaInferenceErrorNotification
     | CpaInferenceEventNotification
+    | CpaInferenceUpstreamNotification
     | DeprecationNoticeNotification
     | EnvironmentConnectionNotification
     | ErrorNotification
@@ -191,6 +193,7 @@ NOTIFICATION_MODELS: dict[str, type[KnownNotificationPayload]] = {
     "cpa/inference/completed": CpaInferenceCompletedNotification,
     "cpa/inference/error": CpaInferenceErrorNotification,
     "cpa/inference/event": CpaInferenceEventNotification,
+    "cpa/inference/upstream": CpaInferenceUpstreamNotification,
     "deprecationNotice": DeprecationNoticeNotification,
     "error": ErrorNotification,
     "externalAgentConfig/import/completed": ExternalAgentConfigImportCompletedNotification,

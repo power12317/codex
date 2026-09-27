@@ -1961,6 +1961,8 @@ pub struct FuzzyFileSearchSessionCompletedNotification {
 server_notification_definitions! {
     /// NEW NOTIFICATIONS
     Error => "error" (v2::ErrorNotification),
+    #[experimental("cpa/inference/upstream")]
+    CpaInferenceUpstream => "cpa/inference/upstream" (v2::CpaInferenceUpstreamNotification),
     #[experimental("cpa/inference/event")]
     CpaInferenceEvent => "cpa/inference/event" (v2::CpaInferenceEventNotification),
     #[experimental("cpa/inference/completed")]

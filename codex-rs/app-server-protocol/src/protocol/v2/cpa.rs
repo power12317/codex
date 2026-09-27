@@ -22,6 +22,8 @@ pub struct CpaCapabilitiesReadResponse {
     #[serde(rename = "manualOAuth")]
     #[ts(rename = "manualOAuth")]
     pub manual_oauth: bool,
+    pub upstream_logs: bool,
+    pub upstream_body_logs: bool,
     pub account_id: Option<String>,
     pub auth_mode: Option<String>,
     pub execution_mode: String,
@@ -76,6 +78,8 @@ pub struct CpaInferenceCompletedNotification {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export_to = "v2/")]
 pub struct CpaInferenceErrorNotification {
+    pub body: Option<String>,
+    pub headers: Option<BTreeMap<String, Vec<String>>>,
     pub request_id: String,
     pub http_status: u16,
     pub message: String,
@@ -121,4 +125,48 @@ pub struct CpaAuthLoginStatusParams {
 pub struct CpaAuthLoginStatusResponse {
     pub status: String,
     pub error: Option<String>,
+}
+
+/// Actual inference transport exchanges, including attempts made during auth recovery.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+#[ts(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    export_to = "v2/"
+)]
+pub enum CpaInferenceUpstreamNotification {
+    Request {
+        request_id: String,
+        url: String,
+        method: String,
+        headers: BTreeMap<String, Vec<String>>,
+        body: String,
+        access_token_sha256: Option<String>,
+        #[serde(rename = "oaiLbNode")]
+        #[ts(rename = "oaiLbNode")]
+        oai_lb_node: Option<String>,
+    },
+    Response {
+        request_id: String,
+        status_code: u16,
+        headers: BTreeMap<String, Vec<String>>,
+        body: Option<String>,
+        #[serde(rename = "oaiLbNode")]
+        #[ts(rename = "oaiLbNode")]
+        oai_lb_node: Option<String>,
+    },
+    Body {
+        request_id: String,
+        body_base64: String,
+    },
+    Error {
+        request_id: String,
+        message: String,
+    },
 }

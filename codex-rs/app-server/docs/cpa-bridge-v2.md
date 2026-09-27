@@ -46,7 +46,7 @@ refresh already in progress are not guaranteed to be mutually exclusive.
 
 - `cpa/capabilities/read {}` returns the previous capabilities with
   `protocolVersion:2`, `credentialFile` (basename), `authOwner` (`cpa`, `codex`, or
-  null if unavailable), and `manualOAuth:true`. `credentialId` remains the worker
+  null if unavailable), `manualOAuth:true`, `upstreamLogs:true`, and `upstreamBodyLogs:true`. `credentialId` remains the worker
   ID. `accountId`/`authMode` are null when no usable Codex-owned login is loaded.
 - `cpa/credential/reload {}` reloads owner/tokens and returns the capabilities.
 - `cpa/inference/start` and `cpa/inference/cancel` retain the v1 fields and
@@ -71,3 +71,34 @@ bound redirect URL and validates the existing OAuth state before the official co
 exchange. It never fetches the supplied URL. Successful authorization writes the
 flat CPA file and reloads AuthManager. OAuth credentials never appear in RPC
 responses. All file selection comes from process settings, never request params.
+
+## Upstream request logs
+
+Workers with `upstreamLogs:true` send ordered `cpa/inference/upstream` notifications.
+These diagnostics may precede the start reply. Each actual HTTP attempt, including
+attempts during 401 recovery, emits a request and then a response or transport error:
+
+- `{requestId,kind:"request",url,method,headers,body,accessTokenSha256,oaiLbNode}`
+- `{requestId,kind:"response",statusCode,headers,body,oaiLbNode}`
+- `{requestId,kind:"body",bodyBase64}`
+- `{requestId,kind:"error",message}`
+
+Headers are maps of string arrays. Request body is the prepared JSON string sent
+to the inference transport. Response body is the complete HTTP failure body, or
+null for a successful stream. With `upstreamBodyLogs:true`, body notifications
+carry each raw transport byte chunk as Base64, preserving SSE comments, event/id
+lines and UTF-8 split across chunks. CPA decodes and joins those chunks for its
+existing response logger instead of logging parsed events twice. The original
+bytes and transport errors are passed unchanged to the official parser; the
+existing event stream continues to drive model response processing. The URL, method and headers come from the prepared transport
+request, including official defaults and applicable shared cookies. Transport-added
+wire details such as Host framing are not synthesized. Sensitive credential/cookie
+headers are represented by `[REDACTED]`; token SHA-256 and the parsed `__oailb` node
+provide log correlation without transferring tokens. Absent correlation values
+are null. CPA feeds these records through its existing request logging hooks.
+
+HTTP failures also include `body` and `headers` in RPC `error.data`, alongside
+`httpStatus`. Accepted-request errors expose nullable `body` and `headers` in
+`cpa/inference/error`. Client response header filtering remains CPA's responsibility.
+This extension does not alter usage accounting, inference retries, raw response
+events, or OAuth state.

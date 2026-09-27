@@ -11,12 +11,23 @@ permissions:
 
 concurrency:
   group: cpa-runtime-image-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   image:
     if: github.ref == 'refs/heads/codex/cpa-managed-auth'
-    runs-on: ubuntu-24.04
+    name: Runtime (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -36,21 +47,70 @@ jobs:
         with:
           context: .
           file: deploy/cpa-runtime/Dockerfile
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           push: true
           build-args: |
             FORK_REVISION=${{ github.sha }}
-          tags: |
-            ghcr.io/power12317/codex-cpa-runtime:cpa-managed-auth
-            ghcr.io/power12317/codex-cpa-runtime:sha-${{ github.sha }}
-          cache-from: type=gha,scope=cpa-runtime-amd64
-          cache-to: type=gha,scope=cpa-runtime-amd64,mode=max
-      - name: Record the published image
+          tags: ghcr.io/power12317/codex-cpa-runtime:sha-${{ github.sha }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=cpa-runtime-${{ matrix.arch }}
+          cache-to: type=gha,scope=cpa-runtime-${{ matrix.arch }},mode=max
+      - name: Verify the published runtime starts
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cpa-auth"
+          printf '%s\n' '{"type":"codex","codex_cli":{"enabled":false,"owner":"cpa","worker_id":"smoke"}}' > "$RUNNER_TEMP/cpa-auth/worker.json"
+          chmod 755 "$RUNNER_TEMP/cpa-auth"
+          chmod 644 "$RUNNER_TEMP/cpa-auth/worker.json"
+          trap 'docker logs cpa-runtime-smoke; docker rm -f cpa-runtime-smoke' EXIT
+          docker run -d --name cpa-runtime-smoke --network host \
+            -e CODEX_CPA_AUTH_FILE=/cpa-auth/worker.json \
+            -e CODEX_CPA_WORKER_ID=smoke -e CODEX_CPA_BRIDGE_KEY=smoke-key \
+            -v "$RUNNER_TEMP/cpa-auth:/cpa-auth:ro" \
+            "ghcr.io/power12317/codex-cpa-runtime@${IMAGE_DIGEST}"
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:38317/readyz; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+      - name: Record the native image
         env:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
           SOURCE_REVISION: ${{ github.sha }}
+          IMAGE_ARCH: ${{ matrix.arch }}
         run: |
           echo "### CPA runtime image" >> "$GITHUB_STEP_SUMMARY"
-          echo "ghcr.io/power12317/codex-cpa-runtime:sha-${SOURCE_REVISION}" >> "$GITHUB_STEP_SUMMARY"
+          echo "ghcr.io/power12317/codex-cpa-runtime:sha-${SOURCE_REVISION}-${IMAGE_ARCH}" >> "$GITHUB_STEP_SUMMARY"
           echo "Digest: ${IMAGE_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
           echo "::notice title=Published CPA image::ghcr.io/power12317/codex-cpa-runtime@${IMAGE_DIGEST}"
+
+  manifest:
+    name: Publish multiarch manifest
+    needs: image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Merge the verified native images
+        env:
+          SOURCE_REVISION: ${{ github.sha }}
+          IMAGE_NAME: ghcr.io/power12317/codex-cpa-runtime
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "${IMAGE_NAME}:cpa-managed-auth" \
+            --tag "${IMAGE_NAME}:sha-${SOURCE_REVISION}" \
+            "${IMAGE_NAME}:sha-${SOURCE_REVISION}-amd64" \
+            "${IMAGE_NAME}:sha-${SOURCE_REVISION}-arm64"
+          echo '### Published multiarch CPA runtime' >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          docker buildx imagetools inspect "${IMAGE_NAME}:sha-${SOURCE_REVISION}" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

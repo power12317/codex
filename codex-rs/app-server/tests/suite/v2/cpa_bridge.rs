@@ -134,21 +134,31 @@ async fn cpa_lossless_single_inference_and_identity_contract() -> Result<()> {
     let request = json!({"model":"mock-model","stream":true,"instructions":"keep exactly", "input":[], "tools":[{"type":"function","name":"shell","parameters":{"type":"object"}}], "tool_choice":{"type":"function","name":"shell"}, "future_extension":{"untouched":true}});
     let events = vec![
         json!({"type":"response.created","response":{"id":"resp"}}),
-        json!({"type":"future.event","payload":{"untouched":true}}),
+        json!({"type":"future.event","payload":{"untouched":true,"text":"你好"}}),
         json!({"type":"response.output_item.done","item":{"type":"function_call","call_id":"call","name":"shell","arguments":format!("{{\"command\":\"touch {}\"}}",marker.display())}}),
         json!({"type":"response.completed","response":{"id":"resp","output":[],"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3,"future_usage":7}}}),
     ];
+    use base64::Engine;
+    let node_claims = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(r#"{"host":"chat.gateway.unified-42.api.openai.com"}"#);
+    let node_cookie = format!("__oailb=e30.{node_claims}.signature; Path=/");
     let body = events
         .iter()
-        .map(|e| format!("data: {e}\n\n"))
+        .enumerate()
+        .map(|(index, e)| {
+            format!(
+                ": keepalive\nid: evt-{index}\nevent: {}\ndata: {e}\n\n",
+                e["type"].as_str().unwrap()
+            )
+        })
         .collect::<String>();
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .respond_with(
             ResponseTemplate::new(/*s*/ 200)
                 .insert_header("content-type", "text/event-stream")
-                .insert_header("set-cookie", "secret=never-forward")
-                .set_body_raw(body, "text/event-stream"),
+                .insert_header("set-cookie", node_cookie)
+                .set_body_raw(body.clone(), "text/event-stream"),
         )
         .expect(/*r*/ 1)
         .mount(&upstream)
@@ -163,6 +173,7 @@ async fn cpa_lossless_single_inference_and_identity_contract() -> Result<()> {
     let caps = receive(&mut ws, "id", json!(1)).await?;
     assert_eq!(caps["result"]["accountId"], json!("account"));
     assert_eq!(caps["result"]["persistentSessions"], json!(false));
+    assert_eq!(caps["result"]["upstreamBodyLogs"], json!(true));
     let mut wrong = start(request.clone());
     wrong["params"]["accountId"] = json!("wrong");
     send(&mut ws, wrong).await?;
@@ -171,23 +182,62 @@ async fn cpa_lossless_single_inference_and_identity_contract() -> Result<()> {
         json!({"httpStatus":403})
     );
     send(&mut ws, start(request.clone())).await?;
-    let accepted = receive(&mut ws, "id", json!(2)).await?;
+    let logged_request =
+        receive(&mut ws, "method", json!("cpa/inference/upstream")).await?["params"].clone();
+    let logged_response =
+        receive(&mut ws, "method", json!("cpa/inference/upstream")).await?["params"].clone();
+    assert_eq!(logged_request["kind"], json!("request"));
+    assert_eq!(
+        serde_json::from_str::<Value>(logged_request["body"].as_str().unwrap())?,
+        request
+    );
+    assert_eq!(
+        logged_request["headers"]["authorization"],
+        json!(["[REDACTED]"])
+    );
+    assert_eq!(logged_response["kind"], json!("response"));
+    assert_eq!(
+        logged_response["headers"]["set-cookie"],
+        json!(["[REDACTED]"])
+    );
+    assert_eq!(logged_response["statusCode"], json!(200));
+    assert_eq!(logged_response["oaiLbNode"], json!("unified-42"));
+    let mut accepted = Value::Null;
+    let mut actual = Vec::new();
+    let mut wire_body = Vec::new();
+    loop {
+        let message = timeout(Duration::from_secs(/*secs*/ 30), ws.next())
+            .await?
+            .unwrap()?;
+        let Message::Text(text) = message else {
+            continue;
+        };
+        let message: Value = serde_json::from_str(&text)?;
+        if message["id"] == 2 {
+            accepted = message;
+            continue;
+        }
+        match message["method"].as_str() {
+            Some("cpa/inference/upstream") if message["params"]["kind"] == "body" => {
+                wire_body.extend(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(message["params"]["bodyBase64"].as_str().unwrap())?,
+                );
+            }
+            Some("cpa/inference/event") => actual.push(message["params"]["event"].clone()),
+            Some("cpa/inference/completed") => {
+                assert_eq!(message["params"], json!({"requestId":"r"}));
+                break;
+            }
+            _ => anyhow::bail!("unexpected inference message: {message}"),
+        }
+    }
     assert_eq!(
         accepted["result"],
         json!({"requestId":"r","statusCode":200,"headers":{"content-type":["text/event-stream"]}})
     );
-    let mut actual = Vec::new();
-    for _ in &events {
-        actual.push(
-            receive(&mut ws, "method", json!("cpa/inference/event")).await?["params"]["event"]
-                .clone(),
-        );
-    }
     assert_eq!(actual, events);
-    assert_eq!(
-        receive(&mut ws, "method", json!("cpa/inference/completed")).await?["params"],
-        json!({"requestId":"r"})
-    );
+    assert_eq!(wire_body, body.as_bytes());
     assert!(!marker.exists());
     let requests = upstream.received_requests().await.unwrap();
     let inference: Vec<_> = requests
@@ -196,6 +246,32 @@ async fn cpa_lossless_single_inference_and_identity_contract() -> Result<()> {
         .collect();
     assert_eq!(inference.len(), 1);
     assert_eq!(inference[0].body_json::<Value>()?, request);
+    assert_eq!(
+        (
+            logged_request["method"].clone(),
+            logged_request["url"].clone()
+        ),
+        (
+            json!(inference[0].method.as_str()),
+            json!(format!("{}{}", upstream.uri(), inference[0].url.path()))
+        )
+    );
+    for (name, values) in logged_request["headers"].as_object().unwrap() {
+        if values != &json!(["[REDACTED]"]) {
+            let actual: Vec<_> = inference[0]
+                .headers
+                .get_all(name.as_str())
+                .iter()
+                .map(|v| v.to_str().unwrap())
+                .collect();
+            assert_eq!(values, &json!(actual), "header {name}");
+        }
+    }
+    use sha2::Digest;
+    assert_eq!(
+        logged_request["accessTokenSha256"],
+        json!(format!("{:x}", sha2::Sha256::digest(b"fake-cpa-access")))
+    );
     assert_eq!(
         inference[0].headers.get("authorization").unwrap(),
         "Bearer fake-cpa-access"
@@ -321,7 +397,23 @@ async fn cpa_managed_401_recovery_refreshes_shared_storage() -> Result<()> {
         start(json!({"model":"mock-model","stream":true,"input":[]})),
     )
     .await?;
-    let accepted = receive(&mut ws, "id", json!(2)).await?;
+    let mut transport_logs = Vec::new();
+    let accepted = timeout(Duration::from_secs(/*secs*/ 30), async {
+        loop {
+            if let Some(Ok(Message::Text(text))) = ws.next().await {
+                let message: Value = serde_json::from_str(&text)?;
+                if message["id"] == 2 {
+                    break Ok::<_, anyhow::Error>(message);
+                }
+                if message["method"] == "cpa/inference/upstream"
+                    && message["params"]["kind"] != "body"
+                {
+                    transport_logs.push(message["params"].clone());
+                }
+            }
+        }
+    })
+    .await??;
     let calls: Vec<_> = upstream
         .received_requests()
         .await
@@ -340,6 +432,36 @@ async fn cpa_managed_401_recovery_refreshes_shared_storage() -> Result<()> {
         "{accepted}; calls={calls:?}"
     );
     receive(&mut ws, "method", json!("cpa/inference/completed")).await?;
+    let upstream_requests = upstream.received_requests().await.unwrap();
+    let inference: Vec<_> = upstream_requests
+        .iter()
+        .filter(|r| r.url.path() == "/v1/responses")
+        .collect();
+    assert_eq!(transport_logs.len(), inference.len() * 2);
+    use sha2::Digest;
+    for (logs, actual) in transport_logs.chunks_exact(/*chunk_size*/ 2).zip(inference) {
+        let token = actual.headers["authorization"]
+            .to_str()?
+            .strip_prefix("Bearer ")
+            .unwrap();
+        assert_eq!(
+            (
+                logs[0]["kind"].clone(),
+                logs[0]["accessTokenSha256"].clone(),
+                logs[1]["kind"].clone(),
+                logs[1]["statusCode"].clone()
+            ),
+            (
+                json!("request"),
+                json!(format!("{:x}", sha2::Sha256::digest(token.as_bytes()))),
+                json!("response"),
+                json!(if token == "fake-refreshed" { 200 } else { 401 })
+            )
+        );
+        if token != "fake-refreshed" {
+            assert_eq!(logs[1]["body"], json!("private-error-never-echo"));
+        }
+    }
     let saved: Value = serde_json::from_slice(&std::fs::read(home.path().join("shared.json"))?)?;
     assert_eq!(saved["access_token"], json!("fake-refreshed"));
     assert_eq!(saved["refresh_token"], json!("fake-refresh-next"));
@@ -480,7 +602,7 @@ async fn cpa_signed_out_login_owner_switch_and_whitelist() -> Result<()> {
 }
 
 #[tokio::test]
-async fn cpa_failures_never_replay_inference_or_echo_private_errors() -> Result<()> {
+async fn cpa_failures_preserve_upstream_errors_without_replaying_inference() -> Result<()> {
     for status in [503, 200] {
         let upstream = MockServer::start().await;
         let body = if status == 200 {
@@ -502,18 +624,25 @@ async fn cpa_failures_never_replay_inference_or_echo_private_errors() -> Result<
             start(json!({"model":"mock-model","stream":true,"input":[]})),
         )
         .await?;
+        let request_log =
+            receive(&mut ws, "method", json!("cpa/inference/upstream")).await?["params"].clone();
+        let response_log =
+            receive(&mut ws, "method", json!("cpa/inference/upstream")).await?["params"].clone();
+        assert_eq!(request_log["kind"], json!("request"));
+        assert_eq!(response_log["statusCode"], json!(status));
         let accepted = receive(&mut ws, "id", json!(2)).await?;
         if status == 503 {
+            assert_eq!(response_log["body"], json!(body));
             assert_eq!(
                 accepted["error"],
-                json!({"code":-32000,"data":{"httpStatus":503},"message":"Upstream inference failed"})
+                json!({"code":-32000,"data":{"httpStatus":503,"body":body,"headers":response_log["headers"]},"message":"Upstream inference failed"})
             );
         } else {
             assert_eq!(accepted["result"]["statusCode"], json!(200));
             receive(&mut ws, "method", json!("cpa/inference/event")).await?;
             assert_eq!(
                 receive(&mut ws, "method", json!("cpa/inference/error")).await?["params"],
-                json!({"requestId":"r","httpStatus":502,"message":"Upstream inference failed"})
+                json!({"requestId":"r","httpStatus":502,"message":"Upstream inference failed","body":null,"headers":null})
             );
             receive(&mut ws, "method", json!("cpa/inference/completed")).await?;
         }

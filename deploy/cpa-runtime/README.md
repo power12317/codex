@@ -42,7 +42,8 @@ so CPA and Codex share loopback networking. The image requires no socket volume.
 The health endpoints are `/healthz` and `/readyz` on the same port.
 
 Official `/usr/local/bin/codex`, `codex-app-server`, `exec-server`, and
-`codex-code-mode-host` binaries remain in the image. The default entrypoint starts
+`codex-code-mode-host`, and the official `bwrap` helper remain in the image. The
+bubblewrap digest is embedded at build time using the upstream packaging contract. The default entrypoint starts
 the persistent app-server; CPA inference returns tool calls to the caller without
 executing them. Use CPAMP → CPA → Codex browser OAuth and paste the callback URL
 through CPAMP. Login writes the shared CPA credential file directly.
@@ -54,3 +55,12 @@ cross-process refresh locking or epoch mechanism is provided.
 
 See [the v2 IPC contract](../../codex-rs/app-server/docs/cpa-bridge-v2.md) and
 [local validation](../../codex-rs/app-server/docs/cpa-bridge-validation.md).
+
+Pushes to `codex/cpa-managed-auth` run `.github/workflows/cpa-runtime-image.yml`.
+The workflow builds this Dockerfile on native Ubuntu amd64 and arm64 runners,
+checks `/readyz` on each architecture, and merges a multiarch manifest for the dedicated
+`ghcr.io/power12317/codex-cpa-runtime:cpa-managed-auth` tag and an immutable
+`sha-<full commit>` tag.
+It never updates `latest`. The image digest is recorded in the Actions summary.
+A triggered workflow is not evidence of a successful publication. GHCR package
+visibility and anonymous manifest access must be checked after publication.

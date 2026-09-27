@@ -10,7 +10,40 @@ The code-mode companion uses official Codex V8 150.4.0 sandbox artifacts verifie
 against the repository's pinned release-manifest SHA-256, using
 `deploy/cpa-runtime/fetch-v8.py`. No V8 version or upstream pin was changed.
 
-## V2 shared-file validation (current)
+## Upstream logging extension and image workflow
+
+The logging follow-up preserves the existing inference/auth flow and adds actual
+prepared HTTP request, response and failure metadata. Validation covered:
+
+- **326/326 passed**: 313 protocol tests, 4 raw event tests and 9 CPA tests,
+  including the byte-tap test (`/tmp/cpa-body-tests.log`).
+- Request logs are compared with the requests received by Wiremock, including
+  method, target, headers and JSON body. Recovery logs are compared with every
+  actual model POST rather than assuming a fixed retry count. Tests verify token
+  SHA-256, header masking, response node extraction, and complete HTTP error
+  bodies/metadata in notifications and RPC errors. Raw-body tests compare exact
+  SSE bytes, including comments/event/id lines and UTF-8 split inside a codepoint,
+  and verify that transport errors pass through unchanged.
+- The coordinating CPA test `TestCodexRuntimeForkV2OAuthAndModeSwitch` passed with
+  the new binary (`/tmp/cpa-runtime-logging-fork.log`): official OAuth, runtime
+  inference and 401 recovery, native mode after switch-off, and runtime streaming
+  after switch-on all produce records through the existing CPA logging path. The
+  final raw-body run also passed with SSE comments/event/id preserved, attempt
+  counts matched to real HTTP calls, and tokens masked.
+- Stable/experimental schemas and generated Python/TypeScript exports were
+  regenerated. Scoped app-server/protocol Clippy passed. Existing usage accounting
+  was not changed. A read-only byte tap now supplies complete wire-body logs,
+  while the official SSE parser and complete JSON event stream remain unchanged.
+
+The branch image workflow builds `deploy/cpa-runtime/Dockerfile` on native amd64
+and arm64 runners, checks `/readyz` for each image, and merges a multiarch manifest.
+It publishes
+`ghcr.io/power12317/codex-cpa-runtime:cpa-managed-auth` and `sha-<full commit>`, and
+uses no QEMU emulation. Actions records the digest and
+source SHA. Anonymous manifest access is verified separately from build success.
+The early v2 local-only results below remain historical.
+
+## V2 shared-file validation (initial milestone)
 
 The v2 change starts from `8ee538eb3`. Tests use fake credentials, a real local TCP
 WebSocket, and Wiremock; no live-account authorization or model billing was used.

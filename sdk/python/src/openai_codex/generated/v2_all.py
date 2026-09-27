@@ -1165,6 +1165,8 @@ class CpaInferenceErrorNotification(BaseModel):
         extra="forbid",
         populate_by_name=True,
     )
+    body: str | None = None
+    headers: dict[str, Any] | None = None
     http_status: Annotated[int, Field(alias="httpStatus", ge=0)]
     message: str
     request_id: Annotated[str, Field(alias="requestId")]
@@ -1177,6 +1179,73 @@ class CpaInferenceEventNotification(BaseModel):
     )
     event: Any
     request_id: Annotated[str, Field(alias="requestId")]
+
+
+class CpaInferenceUpstreamNotification1(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    access_token_sha256: str | None = None
+    body: str
+    headers: dict[str, list[str]]
+    kind: Literal["request"]
+    method: str
+    oai_lb_node: Annotated[str | None, Field(alias="oaiLbNode")] = None
+    request_id: str
+    url: str
+
+
+class CpaInferenceUpstreamNotification2(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    body: str | None = None
+    headers: dict[str, list[str]]
+    kind: Literal["response"]
+    oai_lb_node: Annotated[str | None, Field(alias="oaiLbNode")] = None
+    request_id: str
+    status_code: Annotated[int, Field(ge=0)]
+
+
+class CpaInferenceUpstreamNotification3(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    body_base64: str
+    kind: Literal["body"]
+    request_id: str
+
+
+class CpaInferenceUpstreamNotification4(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    kind: Literal["error"]
+    message: str
+    request_id: str
+
+
+class CpaInferenceUpstreamNotification(
+    RootModel[
+        CpaInferenceUpstreamNotification1
+        | CpaInferenceUpstreamNotification2
+        | CpaInferenceUpstreamNotification3
+        | CpaInferenceUpstreamNotification4
+    ]
+):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: Annotated[
+        CpaInferenceUpstreamNotification1
+        | CpaInferenceUpstreamNotification2
+        | CpaInferenceUpstreamNotification3
+        | CpaInferenceUpstreamNotification4,
+        Field(
+            description="Actual inference transport exchanges, including attempts made during auth recovery.",
+            title="CpaInferenceUpstreamNotification",
+        ),
+    ]
 
 
 class CreditsSnapshot(BaseModel):
@@ -4339,6 +4408,23 @@ class ServerDiagnosticsProcess(BaseModel):
         None
     )
     resident_memory_bytes: Annotated[int | None, Field(alias="residentMemoryBytes", ge=0)] = None
+
+
+class CpaInferenceUpstreamServerNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    emitted_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="emittedAtMs",
+            description="Unix timestamp (in milliseconds) when app-server emitted this notification.",
+        ),
+    ] = None
+    method: Annotated[
+        Literal["cpa/inference/upstream"], Field(title="Cpa/inference/upstreamNotificationMethod")
+    ]
+    params: CpaInferenceUpstreamNotification
 
 
 class CpaInferenceEventServerNotification(BaseModel):
@@ -12904,6 +12990,7 @@ class ItemAutoApprovalReviewCompletedServerNotification(BaseModel):
 class ServerNotification(
     RootModel[
         ErrorServerNotification
+        | CpaInferenceUpstreamServerNotification
         | CpaInferenceEventServerNotification
         | CpaInferenceCompletedServerNotification
         | CpaInferenceErrorServerNotification
@@ -12996,6 +13083,7 @@ class ServerNotification(
     )
     root: Annotated[
         ErrorServerNotification
+        | CpaInferenceUpstreamServerNotification
         | CpaInferenceEventServerNotification
         | CpaInferenceCompletedServerNotification
         | CpaInferenceErrorServerNotification
