@@ -10,7 +10,65 @@ The code-mode companion uses official Codex V8 150.4.0 sandbox artifacts verifie
 against the repository's pinned release-manifest SHA-256, using
 `deploy/cpa-runtime/fetch-v8.py`. No V8 version or upstream pin was changed.
 
-## Results
+## V2 shared-file validation (current)
+
+The v2 change starts from `8ee538eb3`. Tests use fake credentials, a real local TCP
+WebSocket, and Wiremock; no live-account authorization or model billing was used.
+
+- **714/714 passed** with `just test -p codex-login -p codex-app-server-transport
+  -p codex-app-server-protocol -p codex-app-server -E 'package(codex-login) |
+  package(codex-app-server-transport) | package(codex-app-server-protocol) |
+  test(cpa_bridge)'`: 239 login tests, 154 transport tests, 313 protocol tests and
+  8 CPA bridge tests. 1,820 nonselected/ignored tests were skipped. Log:
+  `/tmp/cpa-v2-tests.log`.
+- **4/4 raw event tests passed** with `just test -p codex-api -E
+  'test(raw_responses)'`. These cover unknown/tool events, terminal fields,
+  missing-terminal errors, long idle reads, cancellation and backpressure. Log:
+  `/tmp/cpa-v2-raw-tests.log`.
+- CPA tests cover exact request/event preservation, single-response inference,
+  401 refresh persisted to the shared CPA file, unknown-field preservation, no
+  mirror `auth.json`, callback PKCE correspondence, cross-connection pending
+  login, invalid state and URL rejection without fetching the callback, Bearer
+  authentication, the dedicated route and method whitelist, and owner changes
+  cancelling old inference before reloading the shared credential.
+- The coordinating CPA thread also ran its real v2 cross-repository test
+  `TestCodexRuntimeForkV2OAuthAndModeSwitch` against this macOS binary and reported
+  PASS (`/tmp/cpa-v2-fork3.log`): management OAuth start/callback across separate
+  sockets, shared-file login, Codex inference/401 refresh, switching to native CPA
+  with the refreshed token, then switching back to Codex streaming. No native
+  mirror `auth.json` was created.
+- Stable and experimental app-server schemas were regenerated. Only the
+  precomputed experimental bundle changed. No Cargo dependency or config type
+  changed, so Cargo/Bazel locks and config schema did not require updates.
+- Scoped `just fix` completed for login, app-server transport, app-server protocol
+  and app-server. The one test-helper `unwrap` warning was removed; the final
+  app-server Clippy pass completed without warnings. `just fmt` completed. Tests
+  preceded these final lint/format passes, following repository instructions.
+- Final local `cargo build --locked -p codex-app-server --bin codex-app-server`
+  completed after lint/format. Binary: `codex-rs/target/debug/codex-app-server`
+  (macOS arm64), SHA-256 `ed8f0f0e59f541f35a32031ab49ae5f8d616975e30dbe3b08ee0ca85d4f34bd8`.
+- The deploy entrypoint requires the fixed file, worker ID and bridge key env
+  variables and starts the TCP worker automatically. Shell syntax was checked.
+  Docker daemon queries did not respond within the bounded check; the Linux
+  container image has **not been built or published** in this run.
+
+The v2 implementation deliberately adds no cross-process locks, leases, epochs,
+CAS or handoff protocol. An already-running token exchange is not guaranteed to
+be mutually exclusive with owner switching. The unknown-field-preserving atomic
+replacement is ordinary file persistence. No in-flight request-count API was added.
+
+For review staging, the smallest coherent first stage is the login crate's shared
+storage/manual OAuth foundation plus the transport endpoint helper. Those changes
+leave the original app-server entry path in place until v2 integration lands. The
+second stage connects the v2 RPCs, worker environment and lifecycle with the TCP
+mock tests; the deploy entrypoint and contract/validation docs form a final stage.
+The complete local change exceeds the usual 800-line target because it includes
+all three stages and replaces the v1 integration fixtures.
+
+The prior broader failures below remain historical and unassigned. This run did
+not attempt to fix those unrelated areas or claim a full app-server regression.
+
+## V1 results (historical)
 
 - **10/10 CPA and lossless transport tests passed**:
   `just test -p codex-api -p codex-app-server -E 'test(cpa_bridge) | test(raw_responses)'`.

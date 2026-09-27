@@ -1,43 +1,47 @@
-//! Unix control-socket contract tests use fake managed credentials and a mock upstream.
-#![cfg(unix)]
+//! CPA TCP contract tests use a shared fake credential file and a mock upstream.
 use anyhow::Result;
-use app_test_support::ChatGptAuthFixture;
+use app_test_support::ChatGptIdTokenClaims;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
-use app_test_support::write_chatgpt_auth;
-use codex_config::types::AuthCredentialsStoreMode;
+use app_test_support::encode_id_token;
 use futures::SinkExt;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
-use tokio::net::UnixStream;
+use tokio::net::TcpStream;
 use tokio::time::Duration;
 use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::client_async;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-type Socket = WebSocketStream<UnixStream>;
+type Socket = WebSocketStream<TcpStream>;
 
 async fn connect(home: &TempDir) -> Result<Socket> {
-    let socket = home.path().join("cpa.sock");
+    let port = std::fs::read_to_string(home.path().join("port"))?;
+    let socket = format!("127.0.0.1:{port}");
     let stream = timeout(Duration::from_secs(/*secs*/ 30), async {
         loop {
-            if let Ok(stream) = UnixStream::connect(&socket).await {
+            if let Ok(stream) = TcpStream::connect(&socket).await {
                 break stream;
             }
             tokio::time::sleep(Duration::from_millis(/*millis*/ 20)).await;
         }
     })
     .await?;
-    let (mut ws, _) = client_async("ws://localhost/", stream).await?;
+    let mut request = format!("ws://{socket}/cpa/v1/ws").into_client_request()?;
+    request
+        .headers_mut()
+        .insert("authorization", "Bearer test-bridge-key".parse()?);
+    let (mut ws, _) = client_async(request, stream).await?;
     send(&mut ws, json!({"id":0,"method":"initialize","params":{"clientInfo":{"name":"cpa-tests","version":"1"},"capabilities":{"experimentalApi":true}}})).await?;
     let initialized = receive(&mut ws, "id", json!(0)).await?;
     assert!(initialized.get("result").is_some(), "{initialized}");
@@ -74,24 +78,46 @@ async fn server(upstream: &MockServer, home: &TempDir) -> Result<TestAppServer> 
             "chatgpt_base_url = {:?}\ncli_auth_credentials_store = \"file\"",
             upstream.uri()
         ))
-        .with_extra_config("[cpa_bridge]\nenabled = true\ncredential_id = \"worker\"")
         .write(home.path())?;
-    write_chatgpt_auth(
-        home.path(),
-        ChatGptAuthFixture::new("fake-cpa-access")
-            .account_id("account")
+    let id_token = encode_id_token(
+        &ChatGptIdTokenClaims::new()
             .chatgpt_account_id("account")
-            .chatgpt_user_id("fixture-user"),
-        AuthCredentialsStoreMode::File,
+            .chatgpt_user_id("fixture-user")
+            .email("fixture@example.com"),
     )?;
-    let socket = format!("unix://{}", home.path().join("cpa.sock").display());
+    std::fs::write(
+        home.path().join("shared.json"),
+        serde_json::to_vec(&json!({
+            "type":"codex", "id_token":id_token, "access_token":"fake-cpa-access",
+            "refresh_token":"refresh-token", "account_id":"account", "email":"fixture@example.com",
+            "last_refresh":chrono::Utc::now(), "expired":"2099-01-01T00:00:00Z",
+            "unknown_field":{"keep":true}, "codex_cli":{"enabled":true,"worker_id":"worker","owner":"codex"}
+        }))?,
+    )?;
+    launch(upstream, home).await
+}
+
+async fn launch(upstream: &MockServer, home: &TempDir) -> Result<TestAppServer> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port().to_string();
+    drop(listener);
+    std::fs::write(home.path().join("port"), &port)?;
     TestAppServer::builder()
         .with_codex_home(home.path())
-        .with_args(&["--listen", &socket])
-        .with_env_overrides(&[(
-            "CODEX_REFRESH_TOKEN_URL_OVERRIDE",
-            Some(&format!("{}/oauth/token", upstream.uri())),
-        )])
+        .with_env_overrides(&[
+            (
+                "CODEX_CPA_AUTH_FILE",
+                Some(&home.path().join("shared.json").display().to_string()),
+            ),
+            ("CODEX_CPA_WORKER_ID", Some("worker")),
+            ("CODEX_CPA_BRIDGE_KEY", Some("test-bridge-key")),
+            ("CODEX_CPA_PORT", Some(&port)),
+            ("CODEX_APP_SERVER_LOGIN_ISSUER", Some(&upstream.uri())),
+            (
+                "CODEX_REFRESH_TOKEN_URL_OVERRIDE",
+                Some(&format!("{}/oauth/token", upstream.uri())),
+            ),
+        ])
         .build()
         .await
 }
@@ -178,7 +204,7 @@ async fn cpa_lossless_single_inference_and_identity_contract() -> Result<()> {
         inference[0].headers.get("chatgpt-account-id").unwrap(),
         "account"
     );
-    ws.close(None).await?;
+    ws.close(/*msg*/ None).await?;
     let mut ws = connect(&home).await?;
     send(
         &mut ws,
@@ -248,14 +274,14 @@ async fn cpa_cancel_before_headers_and_disconnect_leave_runtime_alive() -> Resul
     }
     assert_eq!(replies[&2]["error"]["data"], json!({"httpStatus":499}));
     assert_eq!(replies[&3]["result"], json!({}));
-    ws.close(None).await?;
+    ws.close(/*msg*/ None).await?;
     let mut ws = connect(&home).await?;
     send(
         &mut ws,
         start(json!({"model":"mock-model","stream":true,"input":[]})),
     )
     .await?;
-    ws.close(None).await?;
+    ws.close(/*msg*/ None).await?;
     let mut ws = connect(&home).await?;
     send(
         &mut ws,
@@ -270,14 +296,14 @@ async fn cpa_cancel_before_headers_and_disconnect_leave_runtime_alive() -> Resul
 }
 
 #[tokio::test]
-async fn cpa_managed_401_recovery_refreshes_native_storage() -> Result<()> {
+async fn cpa_managed_401_recovery_refreshes_shared_storage() -> Result<()> {
     let upstream = MockServer::start().await;
     app_test_support::mount_workspace_routing(&upstream).await;
     let home = TempDir::new()?;
     let _runtime = server(&upstream, &home).await?;
-    let auth: Value = serde_json::from_slice(&std::fs::read(home.path().join("auth.json"))?)?;
+    let auth: Value = serde_json::from_slice(&std::fs::read(home.path().join("shared.json"))?)?;
     Mock::given(method("POST")).and(path("/oauth/token"))
-        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({"access_token":"fake-refreshed", "refresh_token":"fake-refresh-next", "id_token":auth["tokens"]["id_token"]}))).expect(/*r*/ 1).mount(&upstream).await;
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({"access_token":"fake-refreshed", "refresh_token":"fake-refresh-next", "id_token":auth["id_token"]}))).expect(/*r*/ 1).mount(&upstream).await;
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(wiremock::matchers::header(
@@ -314,56 +340,142 @@ async fn cpa_managed_401_recovery_refreshes_native_storage() -> Result<()> {
         "{accepted}; calls={calls:?}"
     );
     receive(&mut ws, "method", json!("cpa/inference/completed")).await?;
-    let saved: Value = serde_json::from_slice(&std::fs::read(home.path().join("auth.json"))?)?;
-    assert_eq!(saved["tokens"]["access_token"], json!("fake-refreshed"));
-    assert_eq!(saved["tokens"]["refresh_token"], json!("fake-refresh-next"));
+    let saved: Value = serde_json::from_slice(&std::fs::read(home.path().join("shared.json"))?)?;
+    assert_eq!(saved["access_token"], json!("fake-refreshed"));
+    assert_eq!(saved["refresh_token"], json!("fake-refresh-next"));
+    assert_eq!(saved["unknown_field"], json!({"keep":true}));
+    assert!(!home.path().join("auth.json").exists());
     Ok(())
 }
 
 #[tokio::test]
-async fn cpa_opt_in_and_signed_out_capabilities() -> Result<()> {
-    for enabled in [false, true] {
-        let home = TempDir::new()?;
-        std::fs::write(
-            home.path().join("config.toml"),
-            format!(
-                "cli_auth_credentials_store = \"file\"\n[cpa_bridge]\nenabled = {enabled}\ncredential_id = \"worker\"\n"
-            ),
-        )?;
-        let socket = format!("unix://{}", home.path().join("cpa.sock").display());
-        let _runtime = TestAppServer::builder()
-            .with_codex_home(home.path())
-            .with_args(&["--listen", &socket])
-            .build()
-            .await?;
-        let mut ws = connect(&home).await?;
-        send(
-            &mut ws,
-            json!({"id":1,"method":"cpa/capabilities/read","params":{}}),
+async fn cpa_signed_out_login_owner_switch_and_whitelist() -> Result<()> {
+    let upstream = MockServer::start().await;
+    let home = TempDir::new()?;
+    let _runtime = server(&upstream, &home).await?;
+    let file = home.path().join("shared.json");
+    let mut credential: Value = serde_json::from_slice(&std::fs::read(&file)?)?;
+    let id_token = credential["id_token"].clone();
+    credential["access_token"] = json!("");
+    std::fs::write(&file, serde_json::to_vec(&credential)?)?;
+    let mut ws = connect(&home).await?;
+    send(
+        &mut ws,
+        json!({"id":10,"method":"cpa/credential/reload","params":{}}),
+    )
+    .await?;
+    let caps = receive(&mut ws, "id", json!(10)).await?;
+    assert_eq!(
+        (
+            caps["result"]["protocolVersion"].clone(),
+            caps["result"]["credentialFile"].clone(),
+            caps["result"]["authOwner"].clone(),
+            caps["result"]["manualOAuth"].clone(),
+            caps["result"]["authMode"].clone()
+        ),
+        (
+            json!(2),
+            json!("shared.json"),
+            json!("codex"),
+            json!(true),
+            Value::Null
         )
-        .await?;
-        let response = receive(&mut ws, "id", json!(1)).await?;
-        if enabled {
-            assert_eq!(
-                (
-                    response["result"]["accountId"].clone(),
-                    response["result"]["authMode"].clone()
-                ),
-                (Value::Null, Value::Null)
-            );
-            send(
-                &mut ws,
-                start(json!({"model":"mock-model","stream":true,"input":[]})),
-            )
-            .await?;
-            assert_eq!(
-                receive(&mut ws, "id", json!(2)).await?["error"]["data"],
-                json!({"httpStatus":401})
-            );
-        } else {
-            assert_eq!(response["error"]["code"], json!(-32601));
-        }
-    }
+    );
+    send(&mut ws, json!({"id":11,"method":"thread/list","params":{}})).await?;
+    assert_eq!(
+        receive(&mut ws, "id", json!(11)).await?["error"]["code"],
+        json!(-32601)
+    );
+    send(
+        &mut ws,
+        json!({"id":12,"method":"cpa/auth/login/start","params":{}}),
+    )
+    .await?;
+    let login = receive(&mut ws, "id", json!(12)).await?["result"].clone();
+    ws.close(/*msg*/ None).await?;
+    ws = connect(&home).await?;
+    let auth_url = url::Url::parse(login["authUrl"].as_str().unwrap())?;
+    let query: std::collections::HashMap<_, _> = auth_url.query_pairs().into_owned().collect();
+    assert_eq!(
+        (&query["response_type"], &query["code_challenge_method"]),
+        (&"code".to_string(), &"S256".to_string())
+    );
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(
+            json!({"id_token":id_token,"access_token":"logged-in","refresh_token":"new-refresh"}),
+        ))
+        .expect(/*r*/ 1)
+        .mount(&upstream)
+        .await;
+    send(
+        &mut ws,
+        json!({"id":13,"method":"cpa/auth/login/status","params":{"loginId":login["loginId"]}}),
+    )
+    .await?;
+    assert_eq!(
+        receive(&mut ws, "id", json!(13)).await?["result"],
+        json!({"status":"pending","error":null})
+    );
+    send(&mut ws,json!({"id":14,"method":"cpa/auth/login/callback","params":{"loginId":login["loginId"],"redirectUrl":format!("{}?code=test-code&state={}",query["redirect_uri"],query["state"])}})).await?;
+    assert_eq!(
+        receive(&mut ws, "id", json!(14)).await?["result"],
+        json!({"status":"completed","error":null})
+    );
+    let saved: Value = serde_json::from_slice(&std::fs::read(&file)?)?;
+    assert_eq!(
+        (
+            saved["access_token"].clone(),
+            saved["unknown_field"].clone(),
+            saved["codex_cli"].clone()
+        ),
+        (
+            json!("logged-in"),
+            credential["unknown_field"].clone(),
+            credential["codex_cli"].clone()
+        )
+    );
+    assert!(!home.path().join("auth.json").exists());
+    let calls = upstream.received_requests().await.unwrap();
+    let exchange = calls
+        .iter()
+        .find(|r| r.url.path() == "/oauth/token")
+        .unwrap();
+    let form: std::collections::HashMap<_, _> = url::form_urlencoded::parse(&exchange.body)
+        .into_owned()
+        .collect();
+    use base64::Engine;
+    use sha2::Digest;
+    assert_eq!(
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(sha2::Sha256::digest(form["code_verifier"].as_bytes())),
+        query["code_challenge"]
+    );
+    credential = saved;
+    credential["codex_cli"]["owner"] = json!("cpa");
+    std::fs::write(&file, serde_json::to_vec(&credential)?)?;
+    send(
+        &mut ws,
+        json!({"id":15,"method":"cpa/credential/reload","params":{}}),
+    )
+    .await?;
+    let caps = receive(&mut ws, "id", json!(15)).await?;
+    assert_eq!(
+        (
+            caps["result"]["authOwner"].clone(),
+            caps["result"]["authMode"].clone()
+        ),
+        (json!("cpa"), Value::Null)
+    );
+    send(
+        &mut ws,
+        start(json!({"model":"mock-model","stream":true,"input":[]})),
+    )
+    .await?;
+    assert_eq!(
+        receive(&mut ws, "id", json!(2)).await?["error"]["data"],
+        json!({"httpStatus":403})
+    );
     Ok(())
 }
 
@@ -406,5 +518,111 @@ async fn cpa_failures_never_replay_inference_or_echo_private_errors() -> Result<
             receive(&mut ws, "method", json!("cpa/inference/completed")).await?;
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn cpa_tcp_key_path_and_manual_callback_binding() -> Result<()> {
+    let upstream = MockServer::start().await;
+    let home = TempDir::new()?;
+    let _runtime = server(&upstream, &home).await?;
+    let mut ws = connect(&home).await?;
+    let port = std::fs::read_to_string(home.path().join("port"))?;
+    for (path, key, status) in [("/cpa/v1/ws", "wrong", 401), ("/", "test-bridge-key", 404)] {
+        let stream = TcpStream::connect(format!("127.0.0.1:{port}")).await?;
+        let mut request = format!("ws://127.0.0.1:{port}{path}").into_client_request()?;
+        request
+            .headers_mut()
+            .insert("authorization", format!("Bearer {key}").parse()?);
+        let err = client_async(request, stream).await.unwrap_err();
+        let tokio_tungstenite::tungstenite::Error::Http(response) = err else {
+            anyhow::bail!("unexpected handshake error")
+        };
+        assert_eq!(response.status().as_u16(), status);
+    }
+    for wrong_url in [false, true] {
+        send(
+            &mut ws,
+            json!({"id":30,"method":"cpa/auth/login/start","params":{}}),
+        )
+        .await?;
+        let login = receive(&mut ws, "id", json!(30)).await?["result"].clone();
+        ws.close(/*msg*/ None).await?;
+        ws = connect(&home).await?;
+        let redirect = if wrong_url {
+            format!(
+                "{}/steal?code=c&state={}",
+                upstream.uri(),
+                login["state"].as_str().unwrap()
+            )
+        } else {
+            "http://127.0.0.1:1455/auth/callback?code=c&state=wrong".into()
+        };
+        send(&mut ws,json!({"id":31,"method":"cpa/auth/login/callback","params":{"loginId":login["loginId"],"redirectUrl":redirect}})).await?;
+        assert_eq!(
+            receive(&mut ws, "id", json!(31)).await?["result"],
+            json!({"status":"error","error":"OAuth login failed"})
+        );
+    }
+    assert!(
+        upstream
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|r| !matches!(r.url.path(), "/steal" | "/oauth/token"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn cpa_owner_watcher_cancels_old_request_and_reloads_tokens() -> Result<()> {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_delay(Duration::from_secs(/*secs*/ 120)))
+        .mount(&upstream)
+        .await;
+    let home = TempDir::new()?;
+    let _runtime = server(&upstream, &home).await?;
+    let mut ws = connect(&home).await?;
+    send(
+        &mut ws,
+        start(json!({"model":"mock-model","stream":true,"input":[]})),
+    )
+    .await?;
+    timeout(Duration::from_secs(/*secs*/ 30), async {
+        loop {
+            if upstream
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .any(|r| r.url.path() == "/v1/responses")
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(/*millis*/ 20)).await;
+        }
+    })
+    .await?;
+    let file = home.path().join("shared.json");
+    let mut value: Value = serde_json::from_slice(&std::fs::read(&file)?)?;
+    value["codex_cli"]["owner"] = json!("cpa");
+    std::fs::write(&file, serde_json::to_vec(&value)?)?;
+    let response = receive(&mut ws, "id", json!(2)).await?;
+    assert!([json!(401), json!(499)].contains(&response["error"]["data"]["httpStatus"]));
+    value["codex_cli"]["owner"] = json!("codex");
+    value["account_id"] = json!("next-account");
+    std::fs::write(&file, serde_json::to_vec(&value)?)?;
+    send(
+        &mut ws,
+        json!({"id":32,"method":"cpa/credential/reload","params":{}}),
+    )
+    .await?;
+    assert_eq!(
+        receive(&mut ws, "id", json!(32)).await?["result"]["accountId"],
+        json!("next-account")
+    );
     Ok(())
 }

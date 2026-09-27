@@ -1,4 +1,4 @@
-//! Opt-in CPA IPC v1. No request may enter the agent/tool execution pipeline.
+//! Opt-in CPA IPC v2. No request may enter the agent/tool execution pipeline.
 use crate::JsonSchema;
 use crate::TS;
 use serde::Deserialize;
@@ -17,6 +17,11 @@ pub struct CpaCapabilitiesReadResponse {
     pub runtime_version: String,
     pub upstream_revision: String,
     pub credential_id: String,
+    pub credential_file: String,
+    pub auth_owner: Option<String>,
+    #[serde(rename = "manualOAuth")]
+    #[ts(rename = "manualOAuth")]
+    pub manual_oauth: bool,
     pub account_id: Option<String>,
     pub auth_mode: Option<String>,
     pub execution_mode: String,
@@ -74,4 +79,46 @@ pub struct CpaInferenceErrorNotification {
     pub request_id: String,
     pub http_status: u16,
     pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export_to = "v2/")]
+pub struct CpaCredentialReloadParams {}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export_to = "v2/")]
+pub struct CpaAuthLoginStartParams {}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export_to = "v2/")]
+pub struct CpaAuthLoginStartResponse {
+    pub login_id: String,
+    pub auth_url: String,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export_to = "v2/")]
+pub struct CpaAuthLoginCallbackParams {
+    pub login_id: String,
+    pub redirect_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export_to = "v2/")]
+pub struct CpaAuthLoginStatusParams {
+    pub login_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export_to = "v2/")]
+pub struct CpaAuthLoginStatusResponse {
+    pub status: String,
+    pub error: Option<String>,
 }

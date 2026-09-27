@@ -1,4 +1,5 @@
-//! CPA IPC v1 boundary. This module deliberately has no ThreadManager or tool runtime.
+//! CPA IPC v2 boundary. This module deliberately has no ThreadManager or tool runtime.
+mod login;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
@@ -33,6 +34,7 @@ type BridgeResult<T> = std::result::Result<T, JSONRPCErrorError>;
 
 pub(crate) struct CpaBridge {
     credential_id: Option<String>,
+    login: Mutex<Option<login::Login>>,
     auth: Arc<AuthManager>,
     config: Arc<Config>,
     provider: Option<SharedModelProvider>,
@@ -48,26 +50,33 @@ impl CpaBridge {
         installation_id: String,
         outgoing: Arc<OutgoingMessageSender>,
     ) -> Arc<Self> {
-        let effective = config.config_layer_stack.effective_config();
-        let bridge = effective.get("cpa_bridge");
-        let credential_id = bridge
-            .filter(|v| v.get("enabled").and_then(toml::Value::as_bool) == Some(true))
-            .and_then(|v| v.get("credential_id"))
-            .and_then(toml::Value::as_str)
-            .filter(|s| !s.is_empty() && s.len() <= 256)
-            .map(str::to_owned);
+        let credential_id = auth
+            .cpa_credential_file()
+            .map(|file| file.worker_id.clone());
         let provider = credential_id
             .as_ref()
             .map(|_| create_model_provider(config.model_provider.clone(), Some(auth.clone())));
-        Arc::new(Self {
+        let bridge = Arc::new(Self {
             credential_id,
+            login: Mutex::new(None),
             auth,
             config,
             provider,
             installation_id,
             outgoing,
             active: Mutex::new(HashMap::new()),
-        })
+        });
+        if bridge.enabled() {
+            let weak = Arc::downgrade(&bridge);
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(/*millis*/ 500)).await;
+                    let Some(bridge) = weak.upgrade() else { break };
+                    let _ = bridge.reload().await;
+                }
+            });
+        }
+        bridge
     }
 
     pub(crate) fn enabled(&self) -> bool {
@@ -84,7 +93,19 @@ impl CpaBridge {
             .auth_cached()
             .filter(|auth| matches!(auth, CodexAuth::Chatgpt(_)));
         Ok(CpaCapabilitiesReadResponse {
-            protocol_version: 1,
+            protocol_version: 2,
+            credential_file: self
+                .auth
+                .cpa_credential_file()
+                .and_then(|file| file.path.file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            auth_owner: self
+                .auth
+                .cpa_credential_file()
+                .and_then(|file| file.read().ok())
+                .and_then(|value| value["codex_cli"]["owner"].as_str().map(str::to_owned)),
+            manual_oauth: true,
             runtime_version: env!("CARGO_PKG_VERSION").into(),
             upstream_revision: UPSTREAM.into(),
             credential_id,
@@ -138,6 +159,7 @@ impl CpaBridge {
         if self.credential_id.as_deref() != Some(params.credential_id.as_str()) {
             return Err(failure(/*status*/ 403, "credentialId mismatch"));
         }
+        self.require_owner()?;
         self.bound_auth(&params.account_id)?;
         let token = CancellationToken::new();
         {
@@ -212,6 +234,7 @@ impl CpaBridge {
     }
 
     fn bound_auth(&self, account_id: &str) -> BridgeResult<CodexAuth> {
+        self.require_owner()?;
         let auth = self
             .auth
             .auth_cached()

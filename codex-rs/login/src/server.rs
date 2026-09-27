@@ -581,7 +581,7 @@ fn send_response_with_disconnect(
     writer.flush()
 }
 
-fn build_authorize_url(
+pub(crate) fn build_authorize_url(
     issuer: &str,
     client_id: &str,
     redirect_uri: &str,

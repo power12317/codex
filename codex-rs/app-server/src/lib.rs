@@ -9,7 +9,6 @@ use codex_config::NoopThreadConfigLoader;
 use codex_core::config::Config;
 use codex_core::config::UnsupportedUntrustedApprovalPolicyError;
 use codex_core::resolve_installation_id;
-use codex_login::AuthManager;
 #[cfg(debug_assertions)]
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
@@ -107,6 +106,7 @@ mod config_manager_service;
 mod connection_cleanup;
 mod connection_rpc_gate;
 mod cpa_bridge;
+mod cpa_config;
 mod current_time;
 mod daemon_thread_recovery;
 mod dynamic_tools;
@@ -498,6 +498,12 @@ pub async fn run_main_with_transport_options(
     auth: WebsocketAuthSettings,
     runtime_options: AppServerRuntimeOptions,
 ) -> IoResult<AppServerExit> {
+    let cpa = cpa_config::CpaConfig::from_env()?;
+    let transport = cpa
+        .as_ref()
+        .map_or(transport, |cpa| AppServerTransport::WebSocket {
+            bind_address: cpa.bind_address,
+        });
     #[cfg(target_os = "windows")]
     let _registered_core = codex_windows_sandbox::registered_core_requested();
     let loader_overrides = loader_overrides_with_test_user_config_file(
@@ -536,10 +542,7 @@ pub async fn run_main_with_transport_options(
     let bootstrap_config = config_manager
         .load_startup_config(/*fallback_cwd*/ None)
         .await?;
-    let bootstrap_auth =
-        AuthManager::shared_from_config(&bootstrap_config, /*enable_codex_api_key_env*/ false)
-            .await
-            .map_err(std::io::Error::other)?;
+    let bootstrap_auth = cpa_config::auth_manager(&bootstrap_config, cpa.as_ref()).await?;
     config_manager.replace_cloud_config_bundle_loader(
         bootstrap_auth,
         bootstrap_config.chatgpt_base_url.clone(),
@@ -572,10 +575,7 @@ pub async fn run_main_with_transport_options(
         }
     };
     config.auth_config().validate()?;
-    let auth_manager =
-        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false)
-            .await
-            .map_err(std::io::Error::other)?;
+    let auth_manager = cpa_config::auth_manager(&config, cpa.as_ref()).await?;
     config_manager.replace_cloud_config_bundle_loader(
         auth_manager.clone(),
         config.chatgpt_base_url.clone(),
@@ -810,13 +810,23 @@ pub async fn run_main_with_transport_options(
             transport_accept_handles.push(accept_handle);
         }
         AppServerTransport::WebSocket { bind_address } => {
-            let accept_handle = start_websocket_acceptor(
-                *bind_address,
-                transport_event_tx.clone(),
-                transport_shutdown_token.clone(),
-                policy_from_settings(&auth)?,
-            )
-            .await?;
+            let accept_handle = if let Some(cpa) = &cpa {
+                codex_app_server_transport::start_cpa_websocket_acceptor(
+                    *bind_address,
+                    transport_event_tx.clone(),
+                    transport_shutdown_token.clone(),
+                    policy_from_settings(&cpa.auth)?,
+                )
+                .await?
+            } else {
+                start_websocket_acceptor(
+                    *bind_address,
+                    transport_event_tx.clone(),
+                    transport_shutdown_token.clone(),
+                    policy_from_settings(&auth)?,
+                )
+                .await?
+            };
             transport_accept_handles.push(accept_handle);
         }
         AppServerTransport::Off => {}

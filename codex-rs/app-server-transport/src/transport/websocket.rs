@@ -132,6 +132,40 @@ pub async fn start_websocket_acceptor(
     shutdown_token: CancellationToken,
     auth_policy: WebsocketAuthPolicy,
 ) -> IoResult<JoinHandle<()>> {
+    start_websocket_listener(
+        bind_address,
+        transport_event_tx,
+        shutdown_token,
+        auth_policy,
+        /*path*/ None,
+    )
+    .await
+}
+
+/// Starts the dedicated CPA endpoint on the worker listener.
+pub async fn start_cpa_websocket_acceptor(
+    bind_address: SocketAddr,
+    transport_event_tx: mpsc::Sender<TransportEvent>,
+    shutdown_token: CancellationToken,
+    auth_policy: WebsocketAuthPolicy,
+) -> IoResult<JoinHandle<()>> {
+    start_websocket_listener(
+        bind_address,
+        transport_event_tx,
+        shutdown_token,
+        auth_policy,
+        Some("/cpa/v1/ws"),
+    )
+    .await
+}
+
+async fn start_websocket_listener(
+    bind_address: SocketAddr,
+    transport_event_tx: mpsc::Sender<TransportEvent>,
+    shutdown_token: CancellationToken,
+    auth_policy: WebsocketAuthPolicy,
+    path: Option<&str>,
+) -> IoResult<JoinHandle<()>> {
     if is_unauthenticated_non_loopback_listener(bind_address, &auth_policy) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -145,10 +179,14 @@ pub async fn start_websocket_acceptor(
     print_websocket_startup_banner(local_addr);
     info!("app-server websocket listening on ws://{local_addr}");
 
-    let router = Router::new()
+    let router = if let Some(path) = path {
+        Router::new().route(path, any(websocket_upgrade_handler))
+    } else {
+        Router::new().fallback(any(websocket_upgrade_handler))
+    };
+    let router = router
         .route("/readyz", get(health_check_handler))
         .route("/healthz", get(health_check_handler))
-        .fallback(any(websocket_upgrade_handler))
         .layer(middleware::from_fn(reject_requests_with_origin_header))
         .with_state(WebSocketListenerState {
             transport_event_tx,

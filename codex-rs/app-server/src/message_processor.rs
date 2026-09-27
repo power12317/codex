@@ -647,9 +647,19 @@ impl MessageProcessor {
         transport: &AppServerTransport,
         session: Arc<ConnectionSessionState>,
     ) {
-        if request.method.starts_with("cpa/")
-            && (!self.cpa_bridge.enabled()
-                || !matches!(transport, AppServerTransport::UnixSocket { .. }))
+        let allowed_cpa_method = matches!(
+            request.method.as_str(),
+            "initialize"
+                | "cpa/capabilities/read"
+                | "cpa/inference/start"
+                | "cpa/inference/cancel"
+                | "cpa/credential/reload"
+                | "cpa/auth/login/start"
+                | "cpa/auth/login/callback"
+                | "cpa/auth/login/status"
+        );
+        if (self.cpa_bridge.enabled() && !allowed_cpa_method)
+            || (request.method.starts_with("cpa/") && !self.cpa_bridge.enabled())
         {
             self.outgoing
                 .send_error(
@@ -1123,6 +1133,23 @@ impl MessageProcessor {
             ClientRequest::Initialize { .. } => {
                 panic!("Initialize should be handled before initialized request dispatch");
             }
+            ClientRequest::CpaCredentialReload { .. } => self
+                .cpa_bridge
+                .reload()
+                .await
+                .map(|r| Some(ClientResponsePayload::CpaCredentialReload(r))),
+            ClientRequest::CpaAuthLoginStart { .. } => {
+                self.cpa_bridge.login_start().map(|r| Some(r.into()))
+            }
+            ClientRequest::CpaAuthLoginCallback { params, .. } => self
+                .cpa_bridge
+                .login_callback(params)
+                .await
+                .map(|r| Some(ClientResponsePayload::CpaAuthLoginCallback(r))),
+            ClientRequest::CpaAuthLoginStatus { params, .. } => self
+                .cpa_bridge
+                .login_status(&params.login_id)
+                .map(|r| Some(r.into())),
             ClientRequest::CpaCapabilitiesRead { .. } => {
                 self.cpa_bridge.capabilities().map(|r| Some(r.into()))
             }

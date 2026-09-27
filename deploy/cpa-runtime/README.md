@@ -19,42 +19,38 @@ repositories alone do not promise byte-identical rebuilds. This Dockerfile has n
 been built on the macOS development host; Linux container validation is required
 before deployment. Budget sufficient disk for Rust and the V8 companion build.
 
-Paths inside the image:
-
-- `/usr/local/bin/codex-app-server`: default entrypoint, persistent app-server.
-- `/usr/local/bin/codex`: official CLI, including managed OAuth login.
-- `/usr/local/bin/exec-server` and `/usr/local/bin/codex-code-mode-host`: official
-  sibling components retained for ordinary runtime behavior.
-- `/var/lib/codex`: default `CODEX_HOME`, UID/GID 10001, private persistent volume.
-- `/run/codex/cpa.sock`: default IPC socket, separate shared socket volume.
-
-Each worker needs its own CODEX_HOME volume. Mount it only into that worker; CPA
-shares only its socket volume. Authenticate using the official CLI with the same
-worker volume (`--entrypoint /usr/local/bin/codex ... login`). No OAuth reimplementation,
-token injection from CPA, or token projection directory is provided. Use the CLI's
-normal interactive login options for the deployment environment.
-
-Enable the bridge in that worker's `config.toml`:
-
-```toml
-[cpa_bridge]
-enabled = true
-credential_id = "worker-a"
-```
-
-Or pass the equivalent entrypoint arguments:
+The default entrypoint enables the v2 worker from environment variables:
 
 ```sh
---listen unix:///run/codex/cpa.sock \
--c cpa_bridge.enabled=true \
--c 'cpa_bridge.credential_id="worker-a"'
+CODEX_HOME=/var/lib/codex
+CODEX_CPA_AUTH_FILE=/shared/auth/worker-a.json
+CODEX_CPA_WORKER_ID=worker-a
+CODEX_CPA_BRIDGE_KEY=<dedicated-bridge-key>
+CODEX_CPA_PORT=38317
 ```
 
-The image does not enable the bridge automatically. Provision private volume
-ownership for UID/GID 10001 and allow the CPA process to access the socket with
-matching ownership; do not make the socket publicly writable. No TCP listener is
-required. A compose overlay may join `network_mode: service:cli-proxy-api` to reuse
-CPA networking without sharing its authentication files. Configure the CPA worker
-with the stable credential ID and expected ChatGPT workspace account ID.
+Mount CPA's auth directory at `/shared/auth` in both processes. Each worker also
+needs its own `/var/lib/codex` volume for installation identity and runtime state.
+The shared credential file remains in CPA's flat format and is the sole token
+store; do not provision an independent `auth.json` mirror. The image runs as UID
+10001, which needs read/write access to the shared file and its directory.
 
-See [the IPC contract and upgrade gates](../../codex-rs/app-server/docs/cpa-bridge-v1.md).
+The listener is `ws://127.0.0.1:38317/cpa/v1/ws` and requires the bridge key in the
+Authorization Bearer header. Additional workers use 38318, 38319, etc. Port 18317
+belongs to CPAMP. A compose overlay can use `network_mode: service:cli-proxy-api`
+so CPA and Codex share loopback networking. The image requires no socket volume.
+The health endpoints are `/healthz` and `/readyz` on the same port.
+
+Official `/usr/local/bin/codex`, `codex-app-server`, `exec-server`, and
+`codex-code-mode-host` binaries remain in the image. The default entrypoint starts
+the persistent app-server; CPA inference returns tool calls to the caller without
+executing them. Use CPAMP → CPA → Codex browser OAuth and paste the callback URL
+through CPAMP. Login writes the shared CPA credential file directly.
+
+The worker uses tokens only while the file's `codex_cli.owner` is `codex` and its
+`worker_id` matches. CPA controls the ownership flag and retained `enabled`
+preference. Mode switches cancel old requests and reload authentication; no
+cross-process refresh locking or epoch mechanism is provided.
+
+See [the v2 IPC contract](../../codex-rs/app-server/docs/cpa-bridge-v2.md) and
+[local validation](../../codex-rs/app-server/docs/cpa-bridge-validation.md).

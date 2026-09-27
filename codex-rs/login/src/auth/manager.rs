@@ -1,4 +1,6 @@
+mod cpa;
 mod workspace_routing;
+pub use cpa::CpaCredentialFile;
 
 use chrono::Utc;
 use http::StatusCode;
@@ -2040,6 +2042,7 @@ impl UnauthorizedRecovery {
 /// `reload()` is called explicitly. This matches the design goal of avoiding
 /// different parts of the program seeing inconsistent auth data mid‑run.
 pub struct AuthManager {
+    cpa_file: Option<CpaCredentialFile>,
     codex_home: PathBuf,
     inner: RwLock<CachedAuth>,
     auth_change_tx: watch::Sender<u64>,
@@ -2173,16 +2176,29 @@ impl AuthManager {
                 auth_route_config,
             },
             enable_codex_api_key_env,
+            /*cpa_file*/ None,
         )
         .await
     }
 
-    async fn new_from_auth_config(auth_config: AuthConfig, enable_codex_api_key_env: bool) -> Self {
-        let managed_auth = auth_config
-            .load_auth(enable_codex_api_key_env)
-            .await
-            .ok()
-            .flatten();
+    async fn new_from_auth_config(
+        auth_config: AuthConfig,
+        enable_codex_api_key_env: bool,
+        cpa_file: Option<CpaCredentialFile>,
+    ) -> Self {
+        let managed_auth = if let Some(file) = &cpa_file {
+            file.auth(&auth_config.auth_route_config)
+                .await
+                .ok()
+                .flatten()
+                .filter(|auth| auth_config.allows_auth(auth))
+        } else {
+            auth_config
+                .load_auth(enable_codex_api_key_env)
+                .await
+                .ok()
+                .flatten()
+        };
         let AuthConfig {
             codex_home,
             auth_credentials_store_mode,
@@ -2197,6 +2213,7 @@ impl AuthManager {
             agent_identity_authapi_base_url(chatgpt_base_url.as_deref()).ok();
         let (auth_change_tx, _auth_change_rx) = watch::channel(0);
         Self {
+            cpa_file,
             codex_home,
             inner: RwLock::new(CachedAuth {
                 auth: managed_auth,
@@ -2236,6 +2253,7 @@ impl AuthManager {
         let (auth_change_tx, _auth_change_rx) = watch::channel(0);
 
         Arc::new(Self {
+            cpa_file: None,
             codex_home: PathBuf::from("non-existent"),
             inner: RwLock::new(cached),
             auth_change_tx,
@@ -2266,6 +2284,7 @@ impl AuthManager {
         };
         let (auth_change_tx, _auth_change_rx) = watch::channel(0);
         Arc::new(Self {
+            cpa_file: None,
             codex_home,
             inner: RwLock::new(cached),
             auth_change_tx,
@@ -2300,6 +2319,7 @@ impl AuthManager {
         };
         let (auth_change_tx, _auth_change_rx) = watch::channel(0);
         Arc::new(Self {
+            cpa_file: None,
             codex_home: PathBuf::from("non-existent"),
             inner: RwLock::new(cached),
             auth_change_tx,
@@ -2329,6 +2349,7 @@ impl AuthManager {
     pub fn external_bearer_only(config: ModelProviderAuthInfo) -> Arc<Self> {
         let (auth_change_tx, _auth_change_rx) = watch::channel(0);
         Arc::new(Self {
+            cpa_file: None,
             codex_home: PathBuf::from("non-existent"),
             inner: RwLock::new(CachedAuth {
                 auth: None,
@@ -2360,6 +2381,9 @@ impl AuthManager {
 
     /// Current cached auth (clone) without attempting a refresh.
     pub fn auth_cached(&self) -> Option<CodexAuth> {
+        if self.cpa_file.as_ref().is_some_and(|file| !file.is_owner()) {
+            return None;
+        }
         self.inner
             .read()
             .ok()
@@ -2391,6 +2415,9 @@ impl AuthManager {
     /// a guarded reload and then refreshes only if the on-disk auth is unchanged.
     #[instrument(level = "trace", skip_all)]
     pub async fn auth(&self) -> Option<CodexAuth> {
+        if self.cpa_file.is_some() {
+            self.reload().await;
+        }
         if self.has_external_auth() {
             self.reload().await;
             return self.auth_cached();
@@ -2401,7 +2428,11 @@ impl AuthManager {
             && let Err(err) = self.refresh_token().await
         {
             tracing::error!("Failed to refresh token: {}", err);
-            return Some(auth);
+            return if self.cpa_file.is_some() {
+                self.auth_cached()
+            } else {
+                Some(auth)
+            };
         }
         self.auth_cached()
     }
@@ -2410,6 +2441,9 @@ impl AuthManager {
     /// The auth read lock prevents an identity change between the two snapshots.
     pub async fn auth_with_http_client_factory(&self) -> Option<(CodexAuth, HttpClientFactory)> {
         self.auth().await;
+        if self.cpa_file.as_ref().is_some_and(|file| !file.is_owner()) {
+            return None;
+        }
         let cached = self.inner.read().ok()?;
         Some((cached.auth.clone()?, self.http_client_factory()))
     }
@@ -2574,6 +2608,21 @@ impl AuthManager {
     }
 
     async fn load_auth(&self) -> Option<CodexAuth> {
+        if let Some(file) = &self.cpa_file {
+            return file
+                .auth(&self.auth_route_config)
+                .await
+                .ok()
+                .flatten()
+                .filter(|auth| {
+                    validate_auth_restrictions(
+                        Some(&self.allowed_login_methods()),
+                        self.effective_chatgpt_workspaces().as_deref(),
+                        auth,
+                    )
+                    .is_ok()
+                });
+        }
         if let Some(external_auth) = self.external_auth_provider() {
             let cached_auth = self.auth_cached();
             if cached_auth
@@ -2799,7 +2848,12 @@ impl AuthManager {
         enable_codex_api_key_env: bool,
     ) -> Result<Arc<Self>, AuthManagerInitializationError> {
         let external_auth = WorkloadIdentityExternalAuth::from_process_config(&auth_config)?;
-        let mut manager = Self::new_from_auth_config(auth_config, enable_codex_api_key_env).await;
+        let mut manager = Self::new_from_auth_config(
+            auth_config,
+            enable_codex_api_key_env,
+            /*cpa_file*/ None,
+        )
+        .await;
         manager.workload_identity_selected = external_auth.is_some();
         let manager = Arc::new(manager);
         if let Some(external_auth) = external_auth {
@@ -2896,6 +2950,9 @@ impl AuthManager {
 
     async fn refresh_token_from_authority_impl(&self) -> Result<(), RefreshTokenError> {
         tracing::info!("Refreshing token");
+        if self.cpa_file.is_some() {
+            self.reload().await;
+        }
 
         let attempted_auth = self.auth_cached();
         if let Some(error) = attempted_auth

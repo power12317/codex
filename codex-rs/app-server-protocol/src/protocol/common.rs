@@ -496,6 +496,32 @@ enum GetAccountRateLimitsParamsTypeScript {
 }
 
 client_request_definitions! {
+    #[experimental("cpa/credential/reload")]
+    CpaCredentialReload => "cpa/credential/reload" {
+        params: v2::CpaCredentialReloadParams,
+        serialization: None,
+        manual_payload_conversion: manual,
+        response: v2::CpaCapabilitiesReadResponse,
+    },
+    #[experimental("cpa/auth/login/start")]
+    CpaAuthLoginStart => "cpa/auth/login/start" {
+        params: v2::CpaAuthLoginStartParams,
+        serialization: None,
+        response: v2::CpaAuthLoginStartResponse,
+    },
+    #[experimental("cpa/auth/login/callback")]
+    CpaAuthLoginCallback => "cpa/auth/login/callback" {
+        params: v2::CpaAuthLoginCallbackParams,
+        serialization: None,
+        manual_payload_conversion: manual,
+        response: v2::CpaAuthLoginStatusResponse,
+    },
+    #[experimental("cpa/auth/login/status")]
+    CpaAuthLoginStatus => "cpa/auth/login/status" {
+        params: v2::CpaAuthLoginStatusParams,
+        serialization: None,
+        response: v2::CpaAuthLoginStatusResponse,
+    },
     #[experimental("cpa/capabilities/read")]
     CpaCapabilitiesRead => "cpa/capabilities/read" {
         params: v2::CpaCapabilitiesReadParams,
