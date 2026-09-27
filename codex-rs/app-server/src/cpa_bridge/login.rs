@@ -9,8 +9,14 @@ pub(super) struct Login {
 }
 
 impl CpaBridge {
-    pub(crate) fn login_start(&self) -> BridgeResult<CpaAuthLoginStartResponse> {
-        self.require_owner()?;
+    pub(crate) fn login_start(
+        &self,
+        params: CpaAuthLoginStartParams,
+    ) -> BridgeResult<CpaAuthLoginStartResponse> {
+        if self.credential_id.as_deref() != Some(params.credential_id.as_str()) {
+            return Err(failure(/*status*/ 403, "credentialId mismatch"));
+        }
+        self.require_enabled()?;
         let mut options = ServerOptions::new(
             self.config.codex_home.to_path_buf(),
             codex_login::oauth_client_id(),
@@ -59,7 +65,7 @@ impl CpaBridge {
         &self,
         params: CpaAuthLoginCallbackParams,
     ) -> BridgeResult<CpaAuthLoginStatusResponse> {
-        self.require_owner()?;
+        self.require_enabled()?;
         let pending = self
             .login
             .lock()
@@ -69,7 +75,7 @@ impl CpaBridge {
             .and_then(|login| login.pending.take())
             .ok_or_else(|| failure(/*status*/ 404, "Unknown pending loginId"))?;
         let result = match pending.complete(&params.redirect_url).await {
-            Ok(tokens) => self.require_owner()?.save_tokens(tokens),
+            Ok(tokens) => self.require_enabled()?.save_tokens(tokens),
             Err(err) => Err(err),
         };
         let result = CpaAuthLoginStatusResponse {
@@ -86,13 +92,23 @@ impl CpaBridge {
             login.result = result.clone();
         }
         self.auth.reload().await;
+        if result.status == "completed" {
+            self.config_manager.replace_cloud_config_bundle_loader(
+                self.auth.clone(),
+                self.config.chatgpt_base_url.clone(),
+                self.config.http_client_factory(),
+            );
+            self.config_manager
+                .sync_default_client_residency_requirement()
+                .await;
+        }
         Ok(result)
     }
 
     pub(crate) async fn reload(&self) -> BridgeResult<CpaCapabilitiesReadResponse> {
         self.auth.reload().await;
-        if self.require_owner().is_err() {
-            for (_, token) in self
+        if self.require_enabled().is_err() {
+            for token in self
                 .active
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -108,15 +124,12 @@ impl CpaBridge {
         self.capabilities()
     }
 
-    pub(super) fn require_owner(&self) -> BridgeResult<&codex_login::CpaCredentialFile> {
+    pub(super) fn require_enabled(&self) -> BridgeResult<&codex_login::CpaCredentialFile> {
         self.auth
             .cpa_credential_file()
-            .filter(|file| file.is_owner())
+            .filter(|file| file.is_enabled())
             .ok_or_else(|| {
-                failure(
-                    /*status*/ 403,
-                    "Credential is not owned by this worker",
-                )
+                failure(/*status*/ 403, "Credential is disabled")
             })
     }
 }

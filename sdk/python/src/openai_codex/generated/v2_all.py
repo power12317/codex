@@ -1152,6 +1152,15 @@ class ConversationTextRole(Enum):
     assistant = "assistant"
 
 
+class CpaInferenceBodyNotification(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+    )
+    body_base64: Annotated[str, Field(alias="bodyBase64")]
+    request_id: Annotated[str, Field(alias="requestId")]
+
+
 class CpaInferenceCompletedNotification(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -1169,15 +1178,6 @@ class CpaInferenceErrorNotification(BaseModel):
     headers: dict[str, Any] | None = None
     http_status: Annotated[int, Field(alias="httpStatus", ge=0)]
     message: str
-    request_id: Annotated[str, Field(alias="requestId")]
-
-
-class CpaInferenceEventNotification(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid",
-        populate_by_name=True,
-    )
-    event: Any
     request_id: Annotated[str, Field(alias="requestId")]
 
 
@@ -1211,15 +1211,6 @@ class CpaInferenceUpstreamNotification3(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    body_base64: str
-    kind: Literal["body"]
-    request_id: str
-
-
-class CpaInferenceUpstreamNotification4(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
     kind: Literal["error"]
     message: str
     request_id: str
@@ -1230,7 +1221,6 @@ class CpaInferenceUpstreamNotification(
         CpaInferenceUpstreamNotification1
         | CpaInferenceUpstreamNotification2
         | CpaInferenceUpstreamNotification3
-        | CpaInferenceUpstreamNotification4
     ]
 ):
     model_config = ConfigDict(
@@ -1239,8 +1229,7 @@ class CpaInferenceUpstreamNotification(
     root: Annotated[
         CpaInferenceUpstreamNotification1
         | CpaInferenceUpstreamNotification2
-        | CpaInferenceUpstreamNotification3
-        | CpaInferenceUpstreamNotification4,
+        | CpaInferenceUpstreamNotification3,
         Field(
             description="Actual inference transport exchanges, including attempts made during auth recovery.",
             title="CpaInferenceUpstreamNotification",
@@ -4427,7 +4416,7 @@ class CpaInferenceUpstreamServerNotification(BaseModel):
     params: CpaInferenceUpstreamNotification
 
 
-class CpaInferenceEventServerNotification(BaseModel):
+class CpaInferenceBodyServerNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
@@ -4439,9 +4428,9 @@ class CpaInferenceEventServerNotification(BaseModel):
         ),
     ] = None
     method: Annotated[
-        Literal["cpa/inference/event"], Field(title="Cpa/inference/eventNotificationMethod")
+        Literal["cpa/inference/body"], Field(title="Cpa/inference/bodyNotificationMethod")
     ]
-    params: CpaInferenceEventNotification
+    params: CpaInferenceBodyNotification
 
 
 class CpaInferenceCompletedServerNotification(BaseModel):
@@ -12991,7 +12980,7 @@ class ServerNotification(
     RootModel[
         ErrorServerNotification
         | CpaInferenceUpstreamServerNotification
-        | CpaInferenceEventServerNotification
+        | CpaInferenceBodyServerNotification
         | CpaInferenceCompletedServerNotification
         | CpaInferenceErrorServerNotification
         | ThreadStartedServerNotification
@@ -13084,7 +13073,7 @@ class ServerNotification(
     root: Annotated[
         ErrorServerNotification
         | CpaInferenceUpstreamServerNotification
-        | CpaInferenceEventServerNotification
+        | CpaInferenceBodyServerNotification
         | CpaInferenceCompletedServerNotification
         | CpaInferenceErrorServerNotification
         | ThreadStartedServerNotification

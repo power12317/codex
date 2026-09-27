@@ -9,7 +9,7 @@ use std::io::Write;
 #[derive(Clone, Debug)]
 pub struct CpaCredentialFile {
     pub path: PathBuf,
-    pub worker_id: String,
+    pub credential_id: String,
 }
 
 impl CpaCredentialFile {
@@ -17,11 +17,8 @@ impl CpaCredentialFile {
         serde_json::from_slice(&std::fs::read(&self.path)?).map_err(io::Error::other)
     }
 
-    pub fn is_owner(&self) -> bool {
-        self.read().is_ok_and(|value| {
-            value["codex_cli"]["owner"] == "codex"
-                && value["codex_cli"]["worker_id"] == self.worker_id
-        })
+    pub fn is_enabled(&self) -> bool {
+        self.read().is_ok_and(|value| enabled(&value))
     }
 
     pub fn save_tokens(&self, tokens: TokenData) -> io::Result<()> {
@@ -46,8 +43,7 @@ impl CpaCredentialFile {
 impl AuthStorageBackend for CpaCredentialFile {
     fn load(&self) -> io::Result<Option<AuthDotJson>> {
         let value = self.read()?;
-        if value["codex_cli"]["owner"] != "codex"
-            || value["codex_cli"]["worker_id"] != self.worker_id
+        if !enabled(&value)
             || value["access_token"]
                 .as_str()
                 .unwrap_or_default()
@@ -68,12 +64,8 @@ impl AuthStorageBackend for CpaCredentialFile {
 
     fn save(&self, auth: &AuthDotJson) -> io::Result<()> {
         let mut value = self.read()?;
-        if value["codex_cli"]["owner"] != "codex"
-            || value["codex_cli"]["worker_id"] != self.worker_id
-        {
-            return Err(io::Error::other(
-                "CPA credential is not owned by this worker",
-            ));
+        if !enabled(&value) {
+            return Err(io::Error::other("CPA credential is disabled"));
         }
         let tokens = auth
             .tokens
@@ -114,6 +106,14 @@ impl AuthStorageBackend for CpaCredentialFile {
     fn delete(&self) -> io::Result<bool> {
         Err(io::Error::other("CPA manages credential removal"))
     }
+}
+
+fn enabled(value: &Value) -> bool {
+    value["type"]
+        .as_str()
+        .is_some_and(|kind| kind.trim().eq_ignore_ascii_case("codex"))
+        && value["codex_cli"]["enabled"] == true
+        && value["disabled"] != true
 }
 
 fn auth_json(tokens: TokenData, last_refresh: Option<chrono::DateTime<Utc>>) -> AuthDotJson {

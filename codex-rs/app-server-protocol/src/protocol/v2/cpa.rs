@@ -1,4 +1,4 @@
-//! Opt-in CPA IPC v2. No request may enter the agent/tool execution pipeline.
+//! Opt-in CPA IPC v3. No request may enter the agent/tool execution pipeline.
 use crate::JsonSchema;
 use crate::TS;
 use serde::Deserialize;
@@ -16,20 +16,14 @@ pub struct CpaCapabilitiesReadResponse {
     pub protocol_version: u32,
     pub runtime_version: String,
     pub upstream_revision: String,
-    pub credential_id: String,
-    pub credential_file: String,
-    pub auth_owner: Option<String>,
     #[serde(rename = "manualOAuth")]
     #[ts(rename = "manualOAuth")]
     pub manual_oauth: bool,
     pub upstream_logs: bool,
     pub upstream_body_logs: bool,
-    pub account_id: Option<String>,
-    pub auth_mode: Option<String>,
     pub execution_mode: String,
-    pub raw_events: bool,
+    pub raw_body: bool,
     pub operations: Vec<String>,
-    pub persistent_sessions: bool,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -37,7 +31,6 @@ pub struct CpaCapabilitiesReadResponse {
 pub struct CpaInferenceStartParams {
     pub request_id: String,
     pub credential_id: String,
-    pub account_id: String,
     pub operation: String,
     pub source_format: String,
     pub session_id: String,
@@ -64,9 +57,9 @@ pub struct CpaInferenceCancelResponse {}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export_to = "v2/")]
-pub struct CpaInferenceEventNotification {
+pub struct CpaInferenceBodyNotification {
     pub request_id: String,
-    pub event: Value,
+    pub body_base64: String,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -88,12 +81,17 @@ pub struct CpaInferenceErrorNotification {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export_to = "v2/")]
-pub struct CpaCredentialReloadParams {}
+pub struct CpaCredentialReloadParams {
+    #[ts(optional = nullable)]
+    pub credential_id: Option<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export_to = "v2/")]
-pub struct CpaAuthLoginStartParams {}
+pub struct CpaAuthLoginStartParams {
+    pub credential_id: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -160,10 +158,6 @@ pub enum CpaInferenceUpstreamNotification {
         #[serde(rename = "oaiLbNode")]
         #[ts(rename = "oaiLbNode")]
         oai_lb_node: Option<String>,
-    },
-    Body {
-        request_id: String,
-        body_base64: String,
     },
     Error {
         request_id: String,

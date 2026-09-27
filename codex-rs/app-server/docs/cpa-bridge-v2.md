@@ -1,4 +1,6 @@
-# CPA bridge v2
+# CPA bridge v2 (historical)
+
+Superseded by [v3](cpa-bridge-v3.md). The current image does not use this startup or ownership contract.
 
 This is the shared-file successor to v1. It requires CPA IPC major version 2 and
 keeps v1 inference request fields, raw events, cancellation and single-response
@@ -7,22 +9,25 @@ semantics. The worker never executes returned tools or starts an agent turn.
 ## Startup and transport
 
 Set `CODEX_CPA_AUTH_FILE` to one absolute CPA credential file path,
-`CODEX_CPA_WORKER_ID` to that worker's ID and `CODEX_CPA_BRIDGE_KEY` to the bridge
-Bearer key. These process settings enable the worker. `CODEX_CPA_PORT` defaults
+and `CODEX_CPA_WORKER_ID` to that worker's ID directly in Compose. These process
+settings enable the worker. `CODEX_CPA_PORT` defaults
 to 38317; assign 38318, 38319, etc. to additional workers. 18317 is reserved for
 CPAMP. `CODEX_HOME` remains the worker's independent runtime/installation home.
 
 The worker listens on `127.0.0.1` at `/cpa/v1/ws`; that URL path stays unchanged
-across this IPC upgrade. Send `Authorization: Bearer <bridge-key>` during the WS
-upgrade, then the normal `initialize` with `experimentalApi:true`, followed by
+across this IPC upgrade. CPA and Codex share a network namespace; the worker port
+is not mapped externally. The bridge needs no key or Authorization header. Send
+the normal `initialize` with `experimentalApi:true`, followed by
 `initialized`. Only initialize and the RPCs below are exposed on the CPA worker.
-The image's default entrypoint requires the three worker environment variables.
+The image's default entrypoint requires the fixed credential file and worker ID.
 Existing official runtime components and background lifecycles remain available
 inside the process. In v2 the old `[cpa_bridge]`/Unix v1 opt-in is superseded.
 
 ## Shared storage and ownership
 
-The configured file uses CPA's flat shape:
+Use the actual existing CPA filename. It is independent of worker ID and is never
+renamed or copied into a worker-named file. Login and refresh write back to the
+configured original path. The configured file uses CPA's flat shape:
 
 ```json
 {"type":"codex","id_token":"...","access_token":"...","refresh_token":"...","account_id":"...","email":"...","expired":"...","last_refresh":"...","codex_cli":{"enabled":true,"worker_id":"worker-a","owner":"codex"}}

@@ -60,16 +60,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/cpa-auth"
-          printf '%s\n' '{"type":"codex","codex_cli":{"enabled":false,"owner":"cpa","worker_id":"smoke"}}' > "$RUNNER_TEMP/cpa-auth/worker.json"
+          printf '%s\n' '{"type":"codex","codex_cli":{"enabled":false}}' > "$RUNNER_TEMP/cpa-auth/worker.json"
           chmod 755 "$RUNNER_TEMP/cpa-auth"
           chmod 644 "$RUNNER_TEMP/cpa-auth/worker.json"
           trap 'docker logs cpa-runtime-smoke; docker rm -f cpa-runtime-smoke' EXIT
           docker run -d --name cpa-runtime-smoke --network host \
-            -e CODEX_CPA_AUTH_FILE=/cpa-auth/worker.json \
-            -e CODEX_CPA_WORKER_ID=smoke -e CODEX_CPA_BRIDGE_KEY=smoke-key \
             -v "$RUNNER_TEMP/cpa-auth:/cpa-auth:ro" \
             "ghcr.io/power12317/codex-cpa-runtime@${IMAGE_DIGEST}"
-          for attempt in $(seq 1 60); do
+          for _attempt in $(seq 1 60); do
             if curl --fail --silent http://127.0.0.1:38317/readyz; then
               exit 0
             fi
@@ -82,9 +80,11 @@ jobs:
           SOURCE_REVISION: ${{ github.sha }}
           IMAGE_ARCH: ${{ matrix.arch }}
         run: |
-          echo "### CPA runtime image" >> "$GITHUB_STEP_SUMMARY"
-          echo "ghcr.io/power12317/codex-cpa-runtime:sha-${SOURCE_REVISION}-${IMAGE_ARCH}" >> "$GITHUB_STEP_SUMMARY"
-          echo "Digest: ${IMAGE_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### CPA runtime image"
+            echo "ghcr.io/power12317/codex-cpa-runtime:sha-${SOURCE_REVISION}-${IMAGE_ARCH}"
+            echo "Digest: ${IMAGE_DIGEST}"
+          } >> "$GITHUB_STEP_SUMMARY"
           echo "::notice title=Published CPA image::ghcr.io/power12317/codex-cpa-runtime@${IMAGE_DIGEST}"
 
   manifest:

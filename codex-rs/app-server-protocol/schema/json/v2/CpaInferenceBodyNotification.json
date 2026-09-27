@@ -2,15 +2,17 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "properties": {
-    "event": true,
+    "bodyBase64": {
+      "type": "string"
+    },
     "requestId": {
       "type": "string"
     }
   },
   "required": [
-    "event",
+    "bodyBase64",
     "requestId"
   ],
-  "title": "CpaInferenceEventNotification",
+  "title": "CpaInferenceBodyNotification",
   "type": "object"
 }

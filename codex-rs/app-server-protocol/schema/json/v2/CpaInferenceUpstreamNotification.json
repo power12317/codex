@@ -102,28 +102,6 @@
     },
     {
       "properties": {
-        "body_base64": {
-          "type": "string"
-        },
-        "kind": {
-          "enum": [
-            "body"
-          ],
-          "type": "string"
-        },
-        "request_id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "body_base64",
-        "kind",
-        "request_id"
-      ],
-      "type": "object"
-    },
-    {
-      "properties": {
         "kind": {
           "enum": [
             "error"

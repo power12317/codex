@@ -1,5 +1,44 @@
 # CPA bridge validation record
 
+## v3 validation
+
+Contract: V3-SEP-20260927. The current tests start a real directory master and
+per-account app-server children against mock HTTP services. v2 results below are
+historical and do not establish v3 correctness.
+
+- All 11 CPA/master tests pass, including a truly tokenless placeholder followed
+  by OAuth and immediate inference, 401 refresh into the original file, concurrent
+  inference on one child, token-only reload without losing pending OAuth,
+  disabling one of two accounts, and nested Unicode/uppercase-extension IDs.
+- Raw-byte transport coverage preserves split UTF-8, comments, event/id lines,
+  opaque non-JSON data and the original midstream transport error.
+- The expanded run exercised 682 tests across app-server, protocol, API and
+  transport. 681 passed including the corrected raw-byte header assertion.
+  `codex-api::files::tests::upload_openai_file_reports_blob_transport_diagnostics_without_sas`
+  remains failing locally at its existing `message.contains("failed after")`
+  assertion. This file-upload implementation and test were not modified.
+- CPA's real-process `TestCodexRuntimeForkV3OAuthAndModeSwitch` passed against
+  the new binary: tokenless OAuth, immediate inference, 401 refresh, original-file
+  persistence, actual logs, native routing after disable, and streaming after
+  reenable. Coordinator log: `/tmp/cpa-master-v3-fork.log`.
+- An additional 239 native client, login and TUI notification-routing tests passed.
+- Final focused rerun: 12/12 master/bridge and raw-byte transport tests passed.
+  Scoped `just fix` completed without warnings across the seven changed crates.
+  `just fmt` and the final whitespace check completed afterward; tests were not
+  rerun after fix/format, following repository instructions.
+- Stable/experimental schema regeneration, entrypoint shellcheck, and workflow
+  actionlint passed. No live credentials or billable inference were used.
+- The initial debug build exhausted local disk. After it stopped, only this
+  checkout's rebuildable Rust incremental cache was removed. Subsequent commands
+  use `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0`.
+
+The native request boundary deliberately does not create agent turns; ordinary
+agent-turn analytics/cost observations are therefore not synthesized. Enabled
+runtime components retain their actual configured behavior, not an invented
+account heartbeat. A disabled child is killed and reaped rather than gracefully
+flushing account exporters. Already transmitted upstream work cannot be recalled.
+
+
 Validated locally on macOS arm64, 2026-09-27, with Rust 1.95.0. Upstream baseline
 `985cf47a4eb6084b2ff6b30ebdb1216acda85bb4`, branch `codex/cpa-managed-auth`.
 No real OAuth credentials or billable model requests are used by the new tests.
@@ -9,6 +48,21 @@ CARGO_PROFILE_TEST_DEBUG=0` after the first ordinary build exhausted disk space.
 The code-mode companion uses official Codex V8 150.4.0 sandbox artifacts verified
 against the repository's pinned release-manifest SHA-256, using
 `deploy/cpa-runtime/fetch-v8.py`. No V8 version or upstream pin was changed.
+
+## Historical v2 shared network namespace configuration
+
+The CPA listener uses only `127.0.0.1` inside CPA's shared network namespace,
+without a bridge key or Authorization header. Compose directly supplies the fixed
+existing credential path, worker ID and port; no `.env` file, binding RPC,
+worker-derived filename, rename or copy is introduced. AuthManager, OAuth state,
+raw wire logs and the runtime lifecycle are unchanged.
+
+**163/163 tests passed**: all 154 app-server transport tests plus 9 CPA tests,
+using a client with no bridge authentication header. The existing `shared.json`
+fixture deliberately differs from worker ID `worker`, and OAuth/refresh assertions
+read tokens and preserved metadata from that same original file. Log:
+`/tmp/cpa-loopback-tests.log`. Entrypoint shell syntax and Actions actionlint pass.
+Earlier bearer-related validation below describes historical implementations only.
 
 ## Upstream logging extension and image workflow
 

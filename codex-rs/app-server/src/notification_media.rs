@@ -137,7 +137,7 @@ pub(crate) fn without_notification_media(notification: ServerNotification) -> Se
         | ServerNotification::AccountLoginCompleted(_)
         | ServerNotification::GatewayOAuthChanged(_)
         | ServerNotification::CpaInferenceUpstream(_)
-        | ServerNotification::CpaInferenceEvent(_)
+        | ServerNotification::CpaInferenceBody(_)
         | ServerNotification::CpaInferenceCompleted(_)
         | ServerNotification::CpaInferenceError(_) => notification,
     }

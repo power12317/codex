@@ -1,11 +1,11 @@
-//! CPA IPC v2 boundary. This module deliberately has no ThreadManager or tool runtime.
+//! CPA IPC v3 boundary. This module deliberately has no ThreadManager or tool runtime.
 mod login;
 mod upstream;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
+use base64::Engine;
 use codex_api::ApiError;
-use codex_api::RawResponseStream;
 use codex_api::ReqwestTransport;
 use codex_api::ResponsesClient;
 use codex_api::TransportError;
@@ -13,11 +13,13 @@ use codex_app_server_protocol::*;
 use codex_core::config::Config;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientBuilder;
+use codex_http_client::StreamResponse;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::auth_provider_from_auth;
 use codex_model_provider::create_model_provider;
+use futures::StreamExt;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -38,46 +40,42 @@ pub(crate) struct CpaBridge {
     login: Mutex<Option<login::Login>>,
     auth: Arc<AuthManager>,
     config: Arc<Config>,
+    config_manager: crate::config_manager::ConfigManager,
     provider: Option<SharedModelProvider>,
     installation_id: String,
     outgoing: Arc<OutgoingMessageSender>,
-    active: Mutex<HashMap<ConnectionId, (String, CancellationToken)>>,
+    active: Mutex<HashMap<(ConnectionId, String), CancellationToken>>,
+    models: codex_models_manager::manager::SharedModelsManager,
 }
 
 impl CpaBridge {
     pub(crate) fn new(
         config: Arc<Config>,
+        config_manager: crate::config_manager::ConfigManager,
         auth: Arc<AuthManager>,
         installation_id: String,
+        models: codex_models_manager::manager::SharedModelsManager,
         outgoing: Arc<OutgoingMessageSender>,
     ) -> Arc<Self> {
         let credential_id = auth
             .cpa_credential_file()
-            .map(|file| file.worker_id.clone());
+            .map(|file| file.credential_id.clone());
         let provider = credential_id
             .as_ref()
             .map(|_| create_model_provider(config.model_provider.clone(), Some(auth.clone())));
-        let bridge = Arc::new(Self {
+
+        Arc::new(Self {
             credential_id,
             login: Mutex::new(None),
             auth,
             config,
+            config_manager,
             provider,
             installation_id,
+            models,
             outgoing,
             active: Mutex::new(HashMap::new()),
-        });
-        if bridge.enabled() {
-            let weak = Arc::downgrade(&bridge);
-            tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(Duration::from_millis(/*millis*/ 500)).await;
-                    let Some(bridge) = weak.upgrade() else { break };
-                    let _ = bridge.reload().await;
-                }
-            });
-        }
-        bridge
+        })
     }
 
     pub(crate) fn enabled(&self) -> bool {
@@ -85,51 +83,25 @@ impl CpaBridge {
     }
 
     pub(crate) fn capabilities(&self) -> BridgeResult<CpaCapabilitiesReadResponse> {
-        let credential_id = self
-            .credential_id
-            .clone()
-            .ok_or_else(|| failure(/*status*/ 404, "CPA bridge is disabled"))?;
-        let auth = self
-            .auth
-            .auth_cached()
-            .filter(|auth| matches!(auth, CodexAuth::Chatgpt(_)));
-        Ok(CpaCapabilitiesReadResponse {
-            protocol_version: 2,
-            credential_file: self
-                .auth
-                .cpa_credential_file()
-                .and_then(|file| file.path.file_name())
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-            auth_owner: self
-                .auth
-                .cpa_credential_file()
-                .and_then(|file| file.read().ok())
-                .and_then(|value| value["codex_cli"]["owner"].as_str().map(str::to_owned)),
-            manual_oauth: true,
-            upstream_logs: true,
-            upstream_body_logs: true,
-            runtime_version: env!("CARGO_PKG_VERSION").into(),
-            upstream_revision: UPSTREAM.into(),
-            credential_id,
-            account_id: auth.as_ref().and_then(CodexAuth::get_account_id),
-            auth_mode: auth.map(|_| "chatgpt".into()),
-            execution_mode: "inference-only".into(),
-            raw_events: true,
-            operations: vec!["responses".into()],
-            persistent_sessions: false,
-        })
+        if !self.enabled() {
+            return Err(failure(/*status*/ 404, "CPA bridge is disabled"));
+        }
+        Ok(capabilities())
     }
 
     pub(crate) fn disconnect(&self, connection_id: ConnectionId) {
-        if let Some((_, token)) = self
+        let mut active = self
             .active
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&connection_id)
-        {
-            token.cancel();
-        }
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        active.retain(|(connection, _), token| {
+            if *connection == connection_id {
+                token.cancel();
+                false
+            } else {
+                true
+            }
+        });
     }
 
     pub(crate) fn cancel(
@@ -137,17 +109,12 @@ impl CpaBridge {
         connection_id: ConnectionId,
         params: CpaInferenceCancelParams,
     ) -> BridgeResult<CpaInferenceCancelResponse> {
-        let active = self
+        if let Some(token) = self
             .active
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some((request_id, token)) = active.get(&connection_id) {
-            if request_id != &params.request_id {
-                return Err(failure(
-                    /*status*/ 404,
-                    "Unknown requestId for this connection",
-                ));
-            }
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&(connection_id, params.request_id))
+        {
             token.cancel();
         }
         Ok(CpaInferenceCancelResponse {})
@@ -162,21 +129,18 @@ impl CpaBridge {
         if self.credential_id.as_deref() != Some(params.credential_id.as_str()) {
             return Err(failure(/*status*/ 403, "credentialId mismatch"));
         }
-        self.require_owner()?;
-        self.bound_auth(&params.account_id)?;
+        self.require_enabled()?;
+        self.bound_auth()?;
         let token = CancellationToken::new();
         {
             let mut active = self
                 .active
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if active.contains_key(&id.connection_id) {
-                return Err(failure(
-                    /*status*/ 409,
-                    "One inference per connection is allowed",
-                ));
+            if active.contains_key(&(id.connection_id, params.request_id.clone())) {
+                return Err(failure(/*status*/ 409, "Duplicate active requestId"));
             }
-            active.insert(id.connection_id, (params.request_id.clone(), token.clone()));
+            active.insert((id.connection_id, params.request_id.clone()), token.clone());
         }
         let bridge = self.clone();
         tokio::spawn(async move {
@@ -187,11 +151,12 @@ impl CpaBridge {
                 _ = token.cancelled() => Err(failure(/*status*/ 499, "Inference cancelled")),
                 _ = async {
                     loop {
-                        if auth_changes.changed().await.is_err() || bridge.bound_auth(&params.account_id).is_err() { break; }
+                        if auth_changes.changed().await.is_err() || bridge.bound_auth().is_err() { break; }
                     }
                 } => Err(failure(/*status*/ 401, "Managed account changed")),
                 result = bridge.run(&id, &params, &started) => result,
             };
+            let succeeded = result.is_ok();
             if let Err(error) = result {
                 if started.load(Ordering::Acquire) {
                     bridge
@@ -221,14 +186,14 @@ impl CpaBridge {
                     bridge.outgoing.send_error(id.clone(), error).await;
                 }
             }
-            if started.load(Ordering::Acquire) {
+            if succeeded {
                 bridge
                     .outgoing
                     .send_server_notification_to_connections(
                         &[id.connection_id],
                         ServerNotification::CpaInferenceCompleted(
                             CpaInferenceCompletedNotification {
-                                request_id: params.request_id,
+                                request_id: params.request_id.clone(),
                             },
                         ),
                     )
@@ -238,21 +203,18 @@ impl CpaBridge {
                 .active
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .remove(&id.connection_id);
+                .remove(&(id.connection_id, params.request_id));
         });
         Ok(())
     }
 
-    fn bound_auth(&self, account_id: &str) -> BridgeResult<CodexAuth> {
-        self.require_owner()?;
+    fn bound_auth(&self) -> BridgeResult<CodexAuth> {
+        self.require_enabled()?;
         let auth = self
             .auth
             .auth_cached()
             .filter(|a| matches!(a, CodexAuth::Chatgpt(_)))
             .ok_or_else(|| failure(/*status*/ 401, "Managed ChatGPT login required"))?;
-        if auth.get_account_id().as_deref() != Some(account_id) {
-            return Err(failure(/*status*/ 403, "accountId mismatch"));
-        }
         Ok(auth)
     }
 
@@ -260,7 +222,12 @@ impl CpaBridge {
         &self,
         id: &ConnectionRequestId,
         params: &CpaInferenceStartParams,
-    ) -> BridgeResult<RawResponseStream> {
+    ) -> BridgeResult<StreamResponse> {
+        self.auth.reload().await;
+        self.config_manager
+            .check_thread_model_provider(&self.config)
+            .await
+            .map_err(|error| failure(/*status*/ 502, &error.to_string()))?;
         // Only AuthManager acquires/refreshes credentials. No tokens cross IPC.
         let (auth, factory) = tokio::time::timeout(
             Duration::from_secs(/*secs*/ 30),
@@ -269,12 +236,7 @@ impl CpaBridge {
         .await
         .map_err(|_| failure(/*status*/ 504, "Managed authentication timed out"))?
         .ok_or_else(|| failure(/*status*/ 401, "Managed ChatGPT login required"))?;
-        self.bound_auth(&params.account_id)?;
-        if !matches!(auth, CodexAuth::Chatgpt(_))
-            || auth.get_account_id().as_deref() != Some(&params.account_id)
-        {
-            return Err(failure(/*status*/ 401, "Managed account changed"));
-        }
+        self.bound_auth()?;
         // Reject custom credential providers; the bridge has exactly one auth owner.
         let model_provider = self
             .provider
@@ -304,7 +266,7 @@ impl CpaBridge {
                 "Authentication changed during request setup; retry",
             ));
         }
-        self.bound_auth(&params.account_id)?;
+        self.bound_auth()?;
         let mut provider = resolved.provider;
         // A failed stream must never cause another inference attempt.
         // RetryPolicy counts retries after the initial attempt. Zero means one POST.
@@ -324,16 +286,25 @@ impl CpaBridge {
                     "Unable to construct managed HTTP client",
                 )
             })?;
-        let mut headers = codex_api::build_session_headers(
-            Some(params.session_id.clone()),
-            /*thread_id*/ None,
-        );
-        headers.insert(
-            "x-codex-installation-id",
-            self.installation_id
-                .parse()
-                .map_err(|_| failure(/*status*/ 500, "Invalid installation identity"))?,
-        );
+        let model = params
+            .request
+            .get("model")
+            .and_then(Value::as_str)
+            .ok_or_else(|| failure(/*status*/ 400, "model is required"))?;
+        let model_info = self
+            .models
+            .get_model_info(model, &self.config.to_models_manager_config())
+            .await;
+        let (body, options) = codex_core::prepare_inference_request(
+            &self.config,
+            self.auth.clone(),
+            &model_info,
+            &self.installation_id,
+            &params.session_id,
+            &params.request,
+        )
+        .await
+        .map_err(|error| failure(/*status*/ 400, &error.to_string()))?;
         ResponsesClient::new(
             upstream::UpstreamTransport {
                 inner: ReqwestTransport::from_http_client(client),
@@ -345,7 +316,7 @@ impl CpaBridge {
             provider,
             auth_provider_from_auth(&auth),
         )
-        .stream_raw(Value::Object(params.request.clone()), headers)
+        .stream_prepared_body(body, options)
         .await
         .map_err(api_failure)
     }
@@ -409,43 +380,15 @@ impl CpaBridge {
             )
             .await;
         started.store(true, Ordering::Release);
-        let mut terminal = false;
-        while let Some(event) = stream.events.recv().await {
-            let event = event.map_err(api_failure)?;
-            terminal = matches!(
-                event["type"].as_str(),
-                Some("response.completed" | "response.incomplete" | "response.failed" | "error")
-            );
-            // Protocol metadata may contain upstream headers. Fail closed instead of
-            // leaking secrets or silently rewriting a supposedly lossless event.
-            for headers in [
-                event.get("headers"),
-                event.get("response").and_then(|r| r.get("headers")),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                if headers.as_object().is_some_and(|headers| {
-                    headers.keys().any(|k| {
-                        matches!(
-                            k.to_ascii_lowercase().as_str(),
-                            "authorization" | "proxy-authorization" | "cookie" | "set-cookie"
-                        )
-                    })
-                }) {
-                    return Err(failure(
-                        /*status*/ 502,
-                        "Upstream event contains private transport metadata",
-                    ));
-                }
-            }
+        while let Some(chunk) = stream.bytes.next().await {
+            let bytes = chunk.map_err(|error| api_failure(ApiError::Transport(error)))?;
             if !self
                 .outgoing
                 .send_server_notification_to_connection_and_wait(
                     id.connection_id,
-                    ServerNotification::CpaInferenceEvent(CpaInferenceEventNotification {
+                    ServerNotification::CpaInferenceBody(CpaInferenceBodyNotification {
                         request_id: params.request_id.clone(),
-                        event,
+                        body_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
                     }),
                 )
                 .await
@@ -453,13 +396,21 @@ impl CpaBridge {
                 return Err(failure(/*status*/ 499, "Connection closed"));
             }
         }
-        if !terminal {
-            return Err(failure(
-                /*status*/ 502,
-                "Upstream closed without a terminal event",
-            ));
-        }
         Ok(())
+    }
+}
+
+pub(crate) fn capabilities() -> CpaCapabilitiesReadResponse {
+    CpaCapabilitiesReadResponse {
+        protocol_version: 3,
+        runtime_version: env!("CARGO_PKG_VERSION").into(),
+        upstream_revision: UPSTREAM.into(),
+        manual_oauth: true,
+        upstream_logs: true,
+        upstream_body_logs: true,
+        raw_body: true,
+        execution_mode: "inference-only".into(),
+        operations: vec!["responses".into()],
     }
 }
 
@@ -506,14 +457,15 @@ fn api_failure(error: ApiError) -> JSONRPCErrorError {
 fn validate(params: &CpaInferenceStartParams) -> BridgeResult<()> {
     for value in [
         &params.request_id,
-        &params.credential_id,
-        &params.account_id,
         &params.source_format,
         &params.session_id,
     ] {
         if value.is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
             return Err(failure(/*status*/ 400, "Invalid request identity"));
         }
+    }
+    if params.credential_id.is_empty() || params.credential_id.len() > 4096 {
+        return Err(failure(/*status*/ 400, "Invalid credentialId"));
     }
     if params.operation != "responses" {
         return Err(failure(

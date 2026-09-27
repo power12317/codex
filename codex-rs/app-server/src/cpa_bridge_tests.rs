@@ -4,7 +4,7 @@ use pretty_assertions::assert_eq;
 #[test]
 fn request_semantics_are_preserved_and_unsupported_state_is_rejected() {
     let request = json!({"model":"fixture", "stream":true, "instructions":"exact instructions", "tools":[{"type":"function","name":"shell","parameters":{"type":"object"}}], "tool_choice":{"type":"function","name":"shell"}, "extension":{"future":true}});
-    let params: CpaInferenceStartParams = serde_json::from_value(json!({"requestId":"r", "credentialId":"worker", "accountId":"account", "operation":"responses", "sourceFormat":"openai-response", "sessionId":"scope", "request":request})).unwrap();
+    let params: CpaInferenceStartParams = serde_json::from_value(json!({"requestId":"r", "credentialId":"worker", "operation":"responses", "sourceFormat":"openai-response", "sessionId":"scope", "request":request})).unwrap();
     validate(&params).unwrap();
     assert_eq!(Value::Object(params.request.clone()), request);
     for (key, value) in [

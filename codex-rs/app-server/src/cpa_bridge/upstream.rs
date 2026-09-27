@@ -7,13 +7,11 @@ use codex_api::ReqwestTransport;
 use codex_api::TransportError;
 use codex_app_server_protocol::CpaInferenceUpstreamNotification;
 use codex_app_server_protocol::ServerNotification;
-use codex_http_client::ByteStream;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::HttpTransport;
 use codex_http_client::Request;
 use codex_http_client::Response;
 use codex_http_client::StreamResponse;
-use futures::StreamExt;
 use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
@@ -109,15 +107,7 @@ impl HttpTransport for UpstreamTransport {
             },
         };
         self.notify(notification).await?;
-        result.map(|response| StreamResponse {
-            bytes: tap_body(
-                response.bytes,
-                self.outgoing.clone(),
-                self.connection_id,
-                self.request_id.clone(),
-            ),
-            ..response
-        })
+        result
     }
 }
 
@@ -177,41 +167,3 @@ fn oai_lb_node(headers: &HeaderMap) -> Option<String> {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-'))
     .then(|| node.to_string())
 }
-
-// Observe each transport chunk without replacing bytes, errors, or the official parser.
-fn tap_body(
-    bytes: ByteStream,
-    outgoing: Arc<OutgoingMessageSender>,
-    connection_id: ConnectionId,
-    request_id: String,
-) -> ByteStream {
-    bytes
-        .then(move |chunk| {
-            let outgoing = outgoing.clone();
-            let request_id = request_id.clone();
-            async move {
-                let notification = match &chunk {
-                    Ok(bytes) => CpaInferenceUpstreamNotification::Body {
-                        request_id,
-                        body_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
-                    },
-                    Err(error) => CpaInferenceUpstreamNotification::Error {
-                        request_id,
-                        message: error.to_string(),
-                    },
-                };
-                let _ = outgoing
-                    .send_server_notification_to_connection_and_wait(
-                        connection_id,
-                        ServerNotification::CpaInferenceUpstream(notification),
-                    )
-                    .await;
-                chunk
-            }
-        })
-        .boxed()
-}
-
-#[cfg(test)]
-#[path = "upstream_tests.rs"]
-mod tests;

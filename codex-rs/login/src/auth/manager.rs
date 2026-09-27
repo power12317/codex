@@ -2381,7 +2381,11 @@ impl AuthManager {
 
     /// Current cached auth (clone) without attempting a refresh.
     pub fn auth_cached(&self) -> Option<CodexAuth> {
-        if self.cpa_file.as_ref().is_some_and(|file| !file.is_owner()) {
+        if self
+            .cpa_file
+            .as_ref()
+            .is_some_and(|file| !file.is_enabled())
+        {
             return None;
         }
         self.inner
@@ -2441,7 +2445,11 @@ impl AuthManager {
     /// The auth read lock prevents an identity change between the two snapshots.
     pub async fn auth_with_http_client_factory(&self) -> Option<(CodexAuth, HttpClientFactory)> {
         self.auth().await;
-        if self.cpa_file.as_ref().is_some_and(|file| !file.is_owner()) {
+        if self
+            .cpa_file
+            .as_ref()
+            .is_some_and(|file| !file.is_enabled())
+        {
             return None;
         }
         let cached = self.inner.read().ok()?;

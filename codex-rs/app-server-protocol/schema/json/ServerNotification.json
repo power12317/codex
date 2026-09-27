@@ -1117,6 +1117,22 @@
       ],
       "type": "object"
     },
+    "CpaInferenceBodyNotification": {
+      "additionalProperties": false,
+      "properties": {
+        "bodyBase64": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bodyBase64",
+        "requestId"
+      ],
+      "type": "object"
+    },
     "CpaInferenceCompletedNotification": {
       "additionalProperties": false,
       "properties": {
@@ -1165,20 +1181,6 @@
       "required": [
         "httpStatus",
         "message",
-        "requestId"
-      ],
-      "type": "object"
-    },
-    "CpaInferenceEventNotification": {
-      "additionalProperties": false,
-      "properties": {
-        "event": true,
-        "requestId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "event",
         "requestId"
       ],
       "type": "object"
@@ -1281,28 +1283,6 @@
             "kind",
             "request_id",
             "status_code"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "body_base64": {
-              "type": "string"
-            },
-            "kind": {
-              "enum": [
-                "body"
-              ],
-              "type": "string"
-            },
-            "request_id": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "body_base64",
-            "kind",
-            "request_id"
           ],
           "type": "object"
         },
@@ -7162,20 +7142,20 @@
       "properties": {
         "method": {
           "enum": [
-            "cpa/inference/event"
+            "cpa/inference/body"
           ],
-          "title": "Cpa/inference/eventNotificationMethod",
+          "title": "Cpa/inference/bodyNotificationMethod",
           "type": "string"
         },
         "params": {
-          "$ref": "#/definitions/CpaInferenceEventNotification"
+          "$ref": "#/definitions/CpaInferenceBodyNotification"
         }
       },
       "required": [
         "method",
         "params"
       ],
-      "title": "Cpa/inference/eventNotification",
+      "title": "Cpa/inference/bodyNotification",
       "type": "object"
     },
     {

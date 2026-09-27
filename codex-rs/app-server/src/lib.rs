@@ -107,6 +107,8 @@ mod connection_cleanup;
 mod connection_rpc_gate;
 mod cpa_bridge;
 mod cpa_config;
+mod cpa_master;
+pub use cpa_master::run as run_cpa_master;
 mod current_time;
 mod daemon_thread_recovery;
 mod dynamic_tools;
@@ -499,11 +501,6 @@ pub async fn run_main_with_transport_options(
     runtime_options: AppServerRuntimeOptions,
 ) -> IoResult<AppServerExit> {
     let cpa = cpa_config::CpaConfig::from_env()?;
-    let transport = cpa
-        .as_ref()
-        .map_or(transport, |cpa| AppServerTransport::WebSocket {
-            bind_address: cpa.bind_address,
-        });
     #[cfg(target_os = "windows")]
     let _registered_core = codex_windows_sandbox::registered_core_requested();
     let loader_overrides = loader_overrides_with_test_user_config_file(
@@ -810,12 +807,11 @@ pub async fn run_main_with_transport_options(
             transport_accept_handles.push(accept_handle);
         }
         AppServerTransport::WebSocket { bind_address } => {
-            let accept_handle = if let Some(cpa) = &cpa {
+            let accept_handle = if cpa.is_some() {
                 codex_app_server_transport::start_cpa_websocket_acceptor(
                     *bind_address,
                     transport_event_tx.clone(),
                     transport_shutdown_token.clone(),
-                    policy_from_settings(&cpa.auth)?,
                 )
                 .await?
             } else {

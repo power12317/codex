@@ -16,7 +16,6 @@ use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::client_async;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -37,11 +36,7 @@ async fn connect(home: &TempDir) -> Result<Socket> {
         }
     })
     .await?;
-    let mut request = format!("ws://{socket}/cpa/v1/ws").into_client_request()?;
-    request
-        .headers_mut()
-        .insert("authorization", "Bearer test-bridge-key".parse()?);
-    let (mut ws, _) = client_async(request, stream).await?;
+    let (mut ws, _) = client_async(format!("ws://{socket}/cpa/v1/ws"), stream).await?;
     send(&mut ws, json!({"id":0,"method":"initialize","params":{"clientInfo":{"name":"cpa-tests","version":"1"},"capabilities":{"experimentalApi":true}}})).await?;
     let initialized = receive(&mut ws, "id", json!(0)).await?;
     assert!(initialized.get("result").is_some(), "{initialized}");
@@ -70,7 +65,7 @@ async fn receive(ws: &mut Socket, key: &str, expected: Value) -> Result<Value> {
     .await?
 }
 
-async fn server(upstream: &MockServer, home: &TempDir) -> Result<TestAppServer> {
+fn prepare_account(upstream: &MockServer, home: &TempDir) -> Result<()> {
     MockResponsesConfig::new(&upstream.uri())
         .with_provider_name("OpenAI")
         .with_provider_config("requires_openai_auth = true\nstream_idle_timeout_ms = 10")
@@ -85,15 +80,21 @@ async fn server(upstream: &MockServer, home: &TempDir) -> Result<TestAppServer> 
             .chatgpt_user_id("fixture-user")
             .email("fixture@example.com"),
     )?;
+    // Existing filename deliberately differs from worker ID; login/refresh reuse it unchanged.
     std::fs::write(
         home.path().join("shared.json"),
         serde_json::to_vec(&json!({
             "type":"codex", "id_token":id_token, "access_token":"fake-cpa-access",
             "refresh_token":"refresh-token", "account_id":"account", "email":"fixture@example.com",
             "last_refresh":chrono::Utc::now(), "expired":"2099-01-01T00:00:00Z",
-            "unknown_field":{"keep":true}, "codex_cli":{"enabled":true,"worker_id":"worker","owner":"codex"}
+            "unknown_field":{"keep":true}, "codex_cli":{"enabled":true}
         }))?,
     )?;
+    Ok(())
+}
+
+async fn server(upstream: &MockServer, home: &TempDir) -> Result<TestAppServer> {
+    prepare_account(upstream, home)?;
     launch(upstream, home).await
 }
 
@@ -102,15 +103,24 @@ async fn launch(upstream: &MockServer, home: &TempDir) -> Result<TestAppServer> 
     let port = listener.local_addr()?.port().to_string();
     drop(listener);
     std::fs::write(home.path().join("port"), &port)?;
+    use sha2::Digest;
+    let state = home.path().join("state");
+    let account_home = state.join(format!("{:x}", sha2::Sha256::digest(b"shared.json")));
+    std::fs::create_dir_all(&account_home)?;
+    std::fs::copy(
+        home.path().join("config.toml"),
+        account_home.join("config.toml"),
+    )?;
     TestAppServer::builder()
         .with_codex_home(home.path())
         .with_env_overrides(&[
             (
-                "CODEX_CPA_AUTH_FILE",
-                Some(&home.path().join("shared.json").display().to_string()),
+                "CODEX_CPA_AUTH_DIR",
+                Some(&home.path().display().to_string()),
             ),
-            ("CODEX_CPA_WORKER_ID", Some("worker")),
-            ("CODEX_CPA_BRIDGE_KEY", Some("test-bridge-key")),
+            ("CODEX_CPA_AUTH_FILE", None),
+            ("CODEX_HOME", Some(&state.display().to_string())),
+            ("CODEX_CPA_TEST_STDIN_LIFETIME", Some("1")),
             ("CODEX_CPA_PORT", Some(&port)),
             ("CODEX_APP_SERVER_LOGIN_ISSUER", Some(&upstream.uri())),
             (
@@ -123,7 +133,7 @@ async fn launch(upstream: &MockServer, home: &TempDir) -> Result<TestAppServer> 
 }
 
 fn start(request: Value) -> Value {
-    json!({"id":2,"method":"cpa/inference/start","params":{"requestId":"r","credentialId":"worker","accountId":"account","operation":"responses","sourceFormat":"openai-response","sessionId":"caller-worker-account","request":request}})
+    json!({"id":2,"method":"cpa/inference/start","params":{"requestId":"r","credentialId":"shared.json","operation":"responses","sourceFormat":"openai-response","sessionId":"caller-worker-account","request":request}})
 }
 
 #[tokio::test]
@@ -132,7 +142,7 @@ async fn cpa_lossless_single_inference_and_identity_contract() -> Result<()> {
     let home = TempDir::new()?;
     let marker = home.path().join("tool-must-not-run");
     let request = json!({"model":"mock-model","stream":true,"instructions":"keep exactly", "input":[], "tools":[{"type":"function","name":"shell","parameters":{"type":"object"}}], "tool_choice":{"type":"function","name":"shell"}, "future_extension":{"untouched":true}});
-    let events = vec![
+    let events = [
         json!({"type":"response.created","response":{"id":"resp"}}),
         json!({"type":"future.event","payload":{"untouched":true,"text":"你好"}}),
         json!({"type":"response.output_item.done","item":{"type":"function_call","call_id":"call","name":"shell","arguments":format!("{{\"command\":\"touch {}\"}}",marker.display())}}),
@@ -142,7 +152,7 @@ async fn cpa_lossless_single_inference_and_identity_contract() -> Result<()> {
     let node_claims = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode(r#"{"host":"chat.gateway.unified-42.api.openai.com"}"#);
     let node_cookie = format!("__oailb=e30.{node_claims}.signature; Path=/");
-    let body = events
+    let mut body = events
         .iter()
         .enumerate()
         .map(|(index, e)| {
@@ -152,6 +162,7 @@ async fn cpa_lossless_single_inference_and_identity_contract() -> Result<()> {
             )
         })
         .collect::<String>();
+    body.push_str(": opaque trailer\ndata: deliberately-not-json\n\n");
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .respond_with(
@@ -171,15 +182,14 @@ async fn cpa_lossless_single_inference_and_identity_contract() -> Result<()> {
     )
     .await?;
     let caps = receive(&mut ws, "id", json!(1)).await?;
-    assert_eq!(caps["result"]["accountId"], json!("account"));
-    assert_eq!(caps["result"]["persistentSessions"], json!(false));
+    assert_eq!(caps["result"]["protocolVersion"], json!(3));
     assert_eq!(caps["result"]["upstreamBodyLogs"], json!(true));
     let mut wrong = start(request.clone());
-    wrong["params"]["accountId"] = json!("wrong");
+    wrong["params"]["credentialId"] = json!("wrong");
     send(&mut ws, wrong).await?;
     assert_eq!(
         receive(&mut ws, "id", json!(2)).await?["error"]["data"],
-        json!({"httpStatus":403})
+        json!({"httpStatus":503})
     );
     send(&mut ws, start(request.clone())).await?;
     let logged_request =
@@ -187,10 +197,13 @@ async fn cpa_lossless_single_inference_and_identity_contract() -> Result<()> {
     let logged_response =
         receive(&mut ws, "method", json!("cpa/inference/upstream")).await?["params"].clone();
     assert_eq!(logged_request["kind"], json!("request"));
-    assert_eq!(
-        serde_json::from_str::<Value>(logged_request["body"].as_str().unwrap())?,
-        request
-    );
+    let prepared: Value = serde_json::from_str(logged_request["body"].as_str().unwrap())?;
+    assert_eq!(prepared["instructions"], request["instructions"]);
+    assert_eq!(prepared["tool_choice"], request["tool_choice"]);
+    assert_eq!(prepared["future_extension"], request["future_extension"]);
+    assert_eq!(prepared["store"], json!(false));
+    assert_eq!(prepared["include"], json!(["reasoning.encrypted_content"]));
+    assert!(prepared["client_metadata"].is_object());
     assert_eq!(
         logged_request["headers"]["authorization"],
         json!(["[REDACTED]"])
@@ -203,7 +216,6 @@ async fn cpa_lossless_single_inference_and_identity_contract() -> Result<()> {
     assert_eq!(logged_response["statusCode"], json!(200));
     assert_eq!(logged_response["oaiLbNode"], json!("unified-42"));
     let mut accepted = Value::Null;
-    let mut actual = Vec::new();
     let mut wire_body = Vec::new();
     loop {
         let message = timeout(Duration::from_secs(/*secs*/ 30), ws.next())
@@ -218,13 +230,12 @@ async fn cpa_lossless_single_inference_and_identity_contract() -> Result<()> {
             continue;
         }
         match message["method"].as_str() {
-            Some("cpa/inference/upstream") if message["params"]["kind"] == "body" => {
+            Some("cpa/inference/body") => {
                 wire_body.extend(
                     base64::engine::general_purpose::STANDARD
                         .decode(message["params"]["bodyBase64"].as_str().unwrap())?,
                 );
             }
-            Some("cpa/inference/event") => actual.push(message["params"]["event"].clone()),
             Some("cpa/inference/completed") => {
                 assert_eq!(message["params"], json!({"requestId":"r"}));
                 break;
@@ -236,7 +247,6 @@ async fn cpa_lossless_single_inference_and_identity_contract() -> Result<()> {
         accepted["result"],
         json!({"requestId":"r","statusCode":200,"headers":{"content-type":["text/event-stream"]}})
     );
-    assert_eq!(actual, events);
     assert_eq!(wire_body, body.as_bytes());
     assert!(!marker.exists());
     let requests = upstream.received_requests().await.unwrap();
@@ -245,7 +255,7 @@ async fn cpa_lossless_single_inference_and_identity_contract() -> Result<()> {
         .filter(|r| r.url.path() == "/v1/responses")
         .collect();
     assert_eq!(inference.len(), 1);
-    assert_eq!(inference[0].body_json::<Value>()?, request);
+    assert_eq!(inference[0].body_json::<Value>()?, prepared);
     assert_eq!(
         (
             logged_request["method"].clone(),
@@ -365,8 +375,8 @@ async fn cpa_cancel_before_headers_and_disconnect_leave_runtime_alive() -> Resul
     )
     .await?;
     assert_eq!(
-        receive(&mut ws, "id", json!(4)).await?["result"]["accountId"],
-        json!("account")
+        receive(&mut ws, "id", json!(4)).await?["result"]["protocolVersion"],
+        json!(3)
     );
     Ok(())
 }
@@ -471,15 +481,17 @@ async fn cpa_managed_401_recovery_refreshes_shared_storage() -> Result<()> {
 }
 
 #[tokio::test]
-async fn cpa_signed_out_login_owner_switch_and_whitelist() -> Result<()> {
+async fn cpa_fresh_placeholder_oauth_immediate_inference_and_disable() -> Result<()> {
     let upstream = MockServer::start().await;
     let home = TempDir::new()?;
-    let _runtime = server(&upstream, &home).await?;
+    prepare_account(&upstream, &home)?;
     let file = home.path().join("shared.json");
-    let mut credential: Value = serde_json::from_slice(&std::fs::read(&file)?)?;
-    let id_token = credential["id_token"].clone();
-    credential["access_token"] = json!("");
+    let initial: Value = serde_json::from_slice(&std::fs::read(&file)?)?;
+    let id_token = initial["id_token"].clone();
+    let mut credential =
+        json!({"type":"codex","codex_cli":{"enabled":true},"unknown_field":{"keep":true}});
     std::fs::write(&file, serde_json::to_vec(&credential)?)?;
+    let _runtime = launch(&upstream, &home).await?;
     let mut ws = connect(&home).await?;
     send(
         &mut ws,
@@ -487,22 +499,8 @@ async fn cpa_signed_out_login_owner_switch_and_whitelist() -> Result<()> {
     )
     .await?;
     let caps = receive(&mut ws, "id", json!(10)).await?;
-    assert_eq!(
-        (
-            caps["result"]["protocolVersion"].clone(),
-            caps["result"]["credentialFile"].clone(),
-            caps["result"]["authOwner"].clone(),
-            caps["result"]["manualOAuth"].clone(),
-            caps["result"]["authMode"].clone()
-        ),
-        (
-            json!(2),
-            json!("shared.json"),
-            json!("codex"),
-            json!(true),
-            Value::Null
-        )
-    );
+    assert_eq!(caps["result"]["protocolVersion"], json!(3));
+    assert_eq!(caps["result"]["manualOAuth"], json!(true));
     send(&mut ws, json!({"id":11,"method":"thread/list","params":{}})).await?;
     assert_eq!(
         receive(&mut ws, "id", json!(11)).await?["error"]["code"],
@@ -510,7 +508,7 @@ async fn cpa_signed_out_login_owner_switch_and_whitelist() -> Result<()> {
     );
     send(
         &mut ws,
-        json!({"id":12,"method":"cpa/auth/login/start","params":{}}),
+        json!({"id":12,"method":"cpa/auth/login/start","params":{"credentialId":"shared.json"}}),
     )
     .await?;
     let login = receive(&mut ws, "id", json!(12)).await?["result"].clone();
@@ -573,8 +571,25 @@ async fn cpa_signed_out_login_owner_switch_and_whitelist() -> Result<()> {
             .encode(sha2::Sha256::digest(form["code_verifier"].as_bytes())),
         query["code_challenge"]
     );
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(
+            ResponseTemplate::new(/*s*/ 200)
+                .set_body_raw("data: opaque-function-call\n\n", "text/event-stream"),
+        )
+        .expect(/*r*/ 1)
+        .mount(&upstream)
+        .await;
+    send(
+        &mut ws,
+        start(json!({"model":"mock-model","stream":true,"input":[]})),
+    )
+    .await?;
+    let accepted = receive(&mut ws, "id", json!(2)).await?;
+    assert_eq!(accepted["result"]["statusCode"], json!(200), "{accepted}");
+    receive(&mut ws, "method", json!("cpa/inference/completed")).await?;
     credential = saved;
-    credential["codex_cli"]["owner"] = json!("cpa");
+    credential["codex_cli"]["enabled"] = json!(false);
     std::fs::write(&file, serde_json::to_vec(&credential)?)?;
     send(
         &mut ws,
@@ -582,13 +597,7 @@ async fn cpa_signed_out_login_owner_switch_and_whitelist() -> Result<()> {
     )
     .await?;
     let caps = receive(&mut ws, "id", json!(15)).await?;
-    assert_eq!(
-        (
-            caps["result"]["authOwner"].clone(),
-            caps["result"]["authMode"].clone()
-        ),
-        (json!("cpa"), Value::Null)
-    );
+    assert_eq!(caps["result"]["protocolVersion"], json!(3));
     send(
         &mut ws,
         start(json!({"model":"mock-model","stream":true,"input":[]})),
@@ -596,7 +605,7 @@ async fn cpa_signed_out_login_owner_switch_and_whitelist() -> Result<()> {
     .await?;
     assert_eq!(
         receive(&mut ws, "id", json!(2)).await?["error"]["data"],
-        json!({"httpStatus":403})
+        json!({"httpStatus":503})
     );
     Ok(())
 }
@@ -639,11 +648,7 @@ async fn cpa_failures_preserve_upstream_errors_without_replaying_inference() -> 
             );
         } else {
             assert_eq!(accepted["result"]["statusCode"], json!(200));
-            receive(&mut ws, "method", json!("cpa/inference/event")).await?;
-            assert_eq!(
-                receive(&mut ws, "method", json!("cpa/inference/error")).await?["params"],
-                json!({"requestId":"r","httpStatus":502,"message":"Upstream inference failed","body":null,"headers":null})
-            );
+            receive(&mut ws, "method", json!("cpa/inference/body")).await?;
             receive(&mut ws, "method", json!("cpa/inference/completed")).await?;
         }
     }
@@ -651,28 +656,24 @@ async fn cpa_failures_preserve_upstream_errors_without_replaying_inference() -> 
 }
 
 #[tokio::test]
-async fn cpa_tcp_key_path_and_manual_callback_binding() -> Result<()> {
+async fn cpa_tcp_path_and_manual_callback_binding() -> Result<()> {
     let upstream = MockServer::start().await;
     let home = TempDir::new()?;
     let _runtime = server(&upstream, &home).await?;
     let mut ws = connect(&home).await?;
     let port = std::fs::read_to_string(home.path().join("port"))?;
-    for (path, key, status) in [("/cpa/v1/ws", "wrong", 401), ("/", "test-bridge-key", 404)] {
-        let stream = TcpStream::connect(format!("127.0.0.1:{port}")).await?;
-        let mut request = format!("ws://127.0.0.1:{port}{path}").into_client_request()?;
-        request
-            .headers_mut()
-            .insert("authorization", format!("Bearer {key}").parse()?);
-        let err = client_async(request, stream).await.unwrap_err();
-        let tokio_tungstenite::tungstenite::Error::Http(response) = err else {
-            anyhow::bail!("unexpected handshake error")
-        };
-        assert_eq!(response.status().as_u16(), status);
-    }
+    let stream = TcpStream::connect(format!("127.0.0.1:{port}")).await?;
+    let err = client_async(format!("ws://127.0.0.1:{port}/"), stream)
+        .await
+        .unwrap_err();
+    let tokio_tungstenite::tungstenite::Error::Http(response) = err else {
+        anyhow::bail!("unexpected handshake error")
+    };
+    assert_eq!(response.status().as_u16(), 404);
     for wrong_url in [false, true] {
         send(
             &mut ws,
-            json!({"id":30,"method":"cpa/auth/login/start","params":{}}),
+            json!({"id":30,"method":"cpa/auth/login/start","params":{"credentialId":"shared.json"}}),
         )
         .await?;
         let login = receive(&mut ws, "id", json!(30)).await?["result"].clone();
@@ -705,7 +706,7 @@ async fn cpa_tcp_key_path_and_manual_callback_binding() -> Result<()> {
 }
 
 #[tokio::test]
-async fn cpa_owner_watcher_cancels_old_request_and_reloads_tokens() -> Result<()> {
+async fn cpa_file_watcher_stops_runtime_and_restarts_same_credential() -> Result<()> {
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
@@ -737,11 +738,11 @@ async fn cpa_owner_watcher_cancels_old_request_and_reloads_tokens() -> Result<()
     .await?;
     let file = home.path().join("shared.json");
     let mut value: Value = serde_json::from_slice(&std::fs::read(&file)?)?;
-    value["codex_cli"]["owner"] = json!("cpa");
+    value["codex_cli"]["enabled"] = json!(false);
     std::fs::write(&file, serde_json::to_vec(&value)?)?;
     let response = receive(&mut ws, "id", json!(2)).await?;
-    assert!([json!(401), json!(499)].contains(&response["error"]["data"]["httpStatus"]));
-    value["codex_cli"]["owner"] = json!("codex");
+    assert_eq!(response["error"]["data"]["httpStatus"], json!(503));
+    value["codex_cli"]["enabled"] = json!(true);
     value["account_id"] = json!("next-account");
     std::fs::write(&file, serde_json::to_vec(&value)?)?;
     send(
@@ -750,8 +751,197 @@ async fn cpa_owner_watcher_cancels_old_request_and_reloads_tokens() -> Result<()
     )
     .await?;
     assert_eq!(
-        receive(&mut ws, "id", json!(32)).await?["result"]["accountId"],
-        json!("next-account")
+        receive(&mut ws, "id", json!(32)).await?["result"]["protocolVersion"],
+        json!(3)
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn cpa_same_account_concurrency_and_token_reload_keep_oauth_runtime() -> Result<()> {
+    let upstream = MockServer::start().await;
+    let wire = ": keepalive\r\ndata: {\"type\":\"function_call\",\"arguments\":\"opaque\"}\r\n\r\n";
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(
+            ResponseTemplate::new(/*s*/ 200)
+                .set_delay(Duration::from_millis(/*millis*/ 150))
+                .set_body_raw(wire, "text/event-stream"),
+        )
+        .expect(/*r*/ 2)
+        .mount(&upstream)
+        .await;
+    let home = TempDir::new()?;
+    let _runtime = server(&upstream, &home).await?;
+    let mut ws = connect(&home).await?;
+    send(
+        &mut ws,
+        json!({"id":10,"method":"cpa/auth/login/start","params":{"credentialId":"shared.json"}}),
+    )
+    .await?;
+    let login = receive(&mut ws, "id", json!(10)).await?["result"]["loginId"].clone();
+    let file = home.path().join("shared.json");
+    let mut credential: Value = serde_json::from_slice(&std::fs::read(&file)?)?;
+    credential["access_token"] = json!("externally-updated");
+    std::fs::write(&file, serde_json::to_vec(&credential)?)?;
+    send(
+        &mut ws,
+        json!({"id":11,"method":"cpa/credential/reload","params":{"credentialId":"shared.json"}}),
+    )
+    .await?;
+    receive(&mut ws, "id", json!(11)).await?;
+    send(
+        &mut ws,
+        json!({"id":12,"method":"cpa/auth/login/status","params":{"loginId":login}}),
+    )
+    .await?;
+    assert_eq!(
+        receive(&mut ws, "id", json!(12)).await?["result"],
+        json!({"status":"pending","error":null})
+    );
+    for (id, request_id) in [(20, "one"), (21, "two")] {
+        let mut request = start(json!({"model":"mock-model","stream":true,"input":"Hello"}));
+        request["id"] = json!(id);
+        request["params"]["requestId"] = json!(request_id);
+        send(&mut ws, request).await?;
+    }
+    use base64::Engine;
+    let mut bodies = std::collections::BTreeMap::<String, Vec<u8>>::new();
+    let mut accepted = std::collections::BTreeSet::new();
+    let mut completed = std::collections::BTreeSet::new();
+    while completed.len() != 2 {
+        let Some(Ok(Message::Text(text))) =
+            timeout(Duration::from_secs(/*secs*/ 30), ws.next()).await?
+        else {
+            anyhow::bail!("socket closed")
+        };
+        let message: Value = serde_json::from_str(&text)?;
+        assert!(message.get("error").is_none(), "{message}");
+        if let Some(result) = message.get("result") {
+            assert_eq!(result["statusCode"], json!(200));
+            accepted.insert(result["requestId"].as_str().unwrap().to_owned());
+        } else if message["method"] == "cpa/inference/body" {
+            let id = message["params"]["requestId"].as_str().unwrap();
+            assert!(accepted.contains(id));
+            bodies.entry(id.into()).or_default().extend(
+                base64::engine::general_purpose::STANDARD
+                    .decode(message["params"]["bodyBase64"].as_str().unwrap())?,
+            );
+        } else if message["method"] == "cpa/inference/completed" {
+            completed.insert(message["params"]["requestId"].as_str().unwrap().to_owned());
+        } else {
+            assert_eq!(message["method"], json!("cpa/inference/upstream"));
+        }
+    }
+    assert_eq!(
+        bodies,
+        std::collections::BTreeMap::from([
+            ("one".into(), wire.as_bytes().to_vec()),
+            ("two".into(), wire.as_bytes().to_vec())
+        ])
+    );
+    let requests = upstream.received_requests().await.unwrap();
+    for request in requests.iter().filter(|r| r.url.path() == "/v1/responses") {
+        assert_eq!(
+            request.headers["authorization"],
+            "Bearer externally-updated"
+        );
+        let body = request.body_json::<Value>()?;
+        assert_eq!(
+            body["input"][0]["content"],
+            json!([{"type":"input_text","text":"Hello"}])
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn cpa_nested_unicode_ids_have_independent_persistent_runtimes() -> Result<()> {
+    let upstream = MockServer::start().await;
+    let home = TempDir::new()?;
+    let _runtime = server(&upstream, &home).await?;
+    let id = "Nested/原账号 A.JSON";
+    std::fs::create_dir(home.path().join("Nested"))?;
+    let file = home.path().join(id);
+    std::fs::write(
+        &file,
+        serde_json::to_vec(&json!({"type":"codex","codex_cli":{"enabled":true}}))?,
+    )?;
+    use sha2::Digest;
+    let private_home = home
+        .path()
+        .join("state")
+        .join(format!("{:x}", sha2::Sha256::digest(id.as_bytes())));
+    std::fs::create_dir_all(&private_home)?;
+    std::fs::copy(
+        home.path().join("config.toml"),
+        private_home.join("config.toml"),
+    )?;
+    std::fs::write(private_home.join("retained"), b"private account state")?;
+    let mut ws = connect(&home).await?;
+    let mut logins = Vec::new();
+    for credential in ["shared.json", id] {
+        send(
+            &mut ws,
+            json!({"id":40,"method":"cpa/auth/login/start","params":{"credentialId":credential}}),
+        )
+        .await?;
+        let response = receive(&mut ws, "id", json!(40)).await?;
+        assert!(response.get("error").is_none(), "{response}");
+        logins.push(response["result"]["loginId"].clone());
+    }
+    assert_ne!(logins[0], logins[1]);
+    std::fs::write(
+        &file,
+        serde_json::to_vec(&json!({"type":"codex","disabled":true,"codex_cli":{"enabled":true}}))?,
+    )?;
+    send(
+        &mut ws,
+        json!({"id":41,"method":"cpa/credential/reload","params":{"credentialId":id}}),
+    )
+    .await?;
+    assert_eq!(
+        receive(&mut ws, "id", json!(41)).await?["result"]["protocolVersion"],
+        json!(3)
+    );
+    send(
+        &mut ws,
+        json!({"id":42,"method":"cpa/auth/login/status","params":{"loginId":logins[0]}}),
+    )
+    .await?;
+    assert_eq!(
+        receive(&mut ws, "id", json!(42)).await?["result"],
+        json!({"status":"pending","error":null})
+    );
+    send(
+        &mut ws,
+        json!({"id":43,"method":"cpa/auth/login/status","params":{"loginId":logins[1]}}),
+    )
+    .await?;
+    assert!(
+        receive(&mut ws, "id", json!(43))
+            .await?
+            .get("error")
+            .is_some()
+    );
+    std::fs::write(
+        &file,
+        serde_json::to_vec(&json!({"type":"codex","codex_cli":{"enabled":true}}))?,
+    )?;
+    send(
+        &mut ws,
+        json!({"id":44,"method":"cpa/credential/reload","params":{"credentialId":id}}),
+    )
+    .await?;
+    assert_eq!(
+        receive(&mut ws, "id", json!(44)).await?["result"]["protocolVersion"],
+        json!(3)
+    );
+    assert_eq!(
+        std::fs::read(private_home.join("retained"))?,
+        b"private account state"
+    );
+    assert!(!private_home.join("auth.json").exists());
+    assert!(file.exists());
     Ok(())
 }

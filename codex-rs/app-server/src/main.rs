@@ -77,7 +77,6 @@ struct AppServerArgs {
 }
 
 fn main() -> anyhow::Result<()> {
-    let remote_control_disabled = codex_app_server::take_remote_control_disabled_env();
     arg0_dispatch_or_else(move |arg0_paths: Arg0DispatchPaths| async move {
         let AppServerArgs {
             config_overrides,
@@ -91,6 +90,12 @@ fn main() -> anyhow::Result<()> {
             remote_control,
             managed_daemon,
         } = AppServerArgs::parse();
+        if std::env::var_os("CODEX_CPA_AUTH_DIR").is_some()
+            && std::env::var_os("CODEX_CPA_AUTH_FILE").is_none()
+        {
+            return codex_app_server::run_cpa_master().await;
+        }
+        let remote_control_disabled = codex_app_server::take_remote_control_disabled_env();
         let loader_overrides = if disable_managed_config_from_debug_env() {
             LoaderOverrides::without_managed_config_for_tests()
         } else {

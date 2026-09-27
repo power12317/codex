@@ -537,8 +537,10 @@ impl MessageProcessor {
         );
         let cpa_bridge = crate::cpa_bridge::CpaBridge::new(
             config.clone(),
+            config_manager.clone(),
             auth_manager.clone(),
             installation_id,
+            thread_manager.get_models_manager(),
             outgoing.clone(),
         );
         let turn_processor = TurnRequestProcessor::new(
@@ -1138,8 +1140,8 @@ impl MessageProcessor {
                 .reload()
                 .await
                 .map(|r| Some(ClientResponsePayload::CpaCredentialReload(r))),
-            ClientRequest::CpaAuthLoginStart { .. } => {
-                self.cpa_bridge.login_start().map(|r| Some(r.into()))
+            ClientRequest::CpaAuthLoginStart { params, .. } => {
+                self.cpa_bridge.login_start(params).map(|r| Some(r.into()))
             }
             ClientRequest::CpaAuthLoginCallback { params, .. } => self
                 .cpa_bridge

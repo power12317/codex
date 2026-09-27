@@ -19,42 +19,52 @@ repositories alone do not promise byte-identical rebuilds. This Dockerfile has n
 been built on the macOS development host; Linux container validation is required
 before deployment. Budget sufficient disk for Rust and the V8 companion build.
 
-The default entrypoint enables the v2 worker from environment variables:
+The image runs one master and one native app-server child per enabled CPA
+credential. Add this fragment to CPA's Compose file; no additional environment,
+command, bridge key, credential filename or port mapping is needed:
 
-```sh
-CODEX_HOME=/var/lib/codex
-CODEX_CPA_AUTH_FILE=/shared/auth/worker-a.json
-CODEX_CPA_WORKER_ID=worker-a
-CODEX_CPA_BRIDGE_KEY=<dedicated-bridge-key>
-CODEX_CPA_PORT=38317
+```yaml
+services:
+  codex-master:
+    image: ghcr.io/power12317/codex-cpa-runtime:cpa-managed-auth
+    network_mode: service:cli-proxy-api
+    user: "0:0"
+    volumes:
+      - ./auths:/cpa-auth
+      - codex-runtime:/var/lib/codex
+    restart: unless-stopped
+
+volumes:
+  codex-runtime:
 ```
 
-Mount CPA's auth directory at `/shared/auth` in both processes. Each worker also
-needs its own `/var/lib/codex` volume for installation identity and runtime state.
-The shared credential file remains in CPA's flat format and is the sole token
-store; do not provision an independent `auth.json` mirror. The image runs as UID
-10001, which needs read/write access to the shared file and its directory.
+Use the same runtime UID as CPA (the example matches a root CPA container).
+The shared auth directory is `/cpa-auth`; private state is `/var/lib/codex`.
+The loopback endpoint is `ws://127.0.0.1:38317/cpa/v1/ws`, with `/readyz` on that
+same internal port. The existing CPA and gost services need no port changes.
 
-The listener is `ws://127.0.0.1:38317/cpa/v1/ws` and requires the bridge key in the
-Authorization Bearer header. Additional workers use 38318, 38319, etc. Port 18317
-belongs to CPAMP. A compose overlay can use `network_mode: service:cli-proxy-api`
-so CPA and Codex share loopback networking. The image requires no socket volume.
-The health endpoints are `/healthz` and `/readyz` on the same port.
+`credentialId` is CPA's original path relative to the shared auth directory,
+including nested directories, capitalization, spaces and Unicode. It is the
+only account-routing identity. Each child has a persistent private CODEX_HOME
+under a hash of that ID; the hash is not another business ID. Credentials are
+read and refreshed in the original shared file. There is no mirrored auth.json.
 
-Official `/usr/local/bin/codex`, `codex-app-server`, `exec-server`, and
-`codex-code-mode-host`, and the official `bwrap` helper remain in the image. The
-bubblewrap digest is embedded at build time using the upstream packaging contract. The default entrypoint starts
-the persistent app-server; CPA inference returns tool calls to the caller without
-executing them. Use CPAMP → CPA → Codex browser OAuth and paste the callback URL
-through CPAMP. Login writes the shared CPA credential file directly.
+The master scans on startup and every 500 ms. It starts an account only when the
+file has `type: "codex"`, `codex_cli.enabled: true`, and no `disabled: true`.
+CPA's reload RPC uses the same reconciliation code and waits for starts/stops.
+Token-only updates keep the same child. Disabling/removing a credential ends its
+child without draining inference or flushing exporters; private state survives
+reenabling. An already submitted upstream operation cannot be recalled.
+CPA owns global/per-account preferences and request selection; the master only
+applies effective file flags. The runtime does not execute model tool calls.
 
-The worker uses tokens only while the file's `codex_cli.owner` is `codex` and its
-`worker_id` matches. CPA controls the ownership flag and retained `enabled`
-preference. Mode switches cancel old requests and reload authentication; no
-cross-process refresh locking or epoch mechanism is provided.
+`codex`, `codex-app-server`, `exec-server`, `codex-code-mode-host` and the official
+`bwrap` helper remain in the image. Enabled children retain applicable native
+background activities. Refresh runs on credential access/401 recovery; no
+independent account heartbeat or synthetic analytics event is added.
 
-See [the v2 IPC contract](../../codex-rs/app-server/docs/cpa-bridge-v2.md) and
-[local validation](../../codex-rs/app-server/docs/cpa-bridge-validation.md).
+See the [v3 contract](../../codex-rs/app-server/docs/cpa-bridge-v3.md) and
+[validation record](../../codex-rs/app-server/docs/cpa-bridge-validation.md).
 
 Pushes to `codex/cpa-managed-auth` run `.github/workflows/cpa-runtime-image.yml`.
 The workflow builds this Dockerfile on native Ubuntu amd64 and arm64 runners,

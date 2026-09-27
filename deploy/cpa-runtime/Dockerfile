@@ -29,7 +29,7 @@ RUN mkdir /out && cp target/release/codex target/release/codex-app-server \
 FROM ${RUNTIME_IMAGE}
 ARG FORK_REVISION=unrecorded-local-build
 LABEL org.opencontainers.image.revision=${FORK_REVISION} \
-    io.codex.cpa.protocol-version="2" \
+    io.codex.cpa.protocol-version="3" \
     io.codex.cpa.upstream-revision="985cf47a4eb6084b2ff6b30ebdb1216acda85bb4"
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates libssl3 libasound2 libudev1 libcap2 git ripgrep bash \
@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && install -d -o codex -g codex -m 0700 /var/lib/codex /run/codex
 COPY --from=build /out/ /usr/local/bin/
 COPY deploy/cpa-runtime/entrypoint.sh /usr/local/bin/codex-cpa-entrypoint
-ENV CODEX_HOME=/var/lib/codex CODEX_CPA_PORT=38317
+ENV CODEX_HOME=/var/lib/codex CODEX_CPA_PORT=38317 CODEX_CPA_AUTH_DIR=/cpa-auth
 USER codex
 WORKDIR /home/codex
 ENTRYPOINT ["/usr/local/bin/codex-cpa-entrypoint"]

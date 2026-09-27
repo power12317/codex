@@ -17,9 +17,9 @@ from .v2_all import CommandExecOutputDeltaNotification
 from .v2_all import CommandExecutionOutputDeltaNotification
 from .v2_all import ConfigWarningNotification
 from .v2_all import ContextCompactedNotification
+from .v2_all import CpaInferenceBodyNotification
 from .v2_all import CpaInferenceCompletedNotification
 from .v2_all import CpaInferenceErrorNotification
-from .v2_all import CpaInferenceEventNotification
 from .v2_all import CpaInferenceUpstreamNotification
 from .v2_all import DeprecationNoticeNotification
 from .v2_all import EnvironmentConnectionNotification
@@ -104,9 +104,9 @@ KnownNotificationPayload: TypeAlias = (
     | CommandExecutionOutputDeltaNotification
     | ConfigWarningNotification
     | ContextCompactedNotification
+    | CpaInferenceBodyNotification
     | CpaInferenceCompletedNotification
     | CpaInferenceErrorNotification
-    | CpaInferenceEventNotification
     | CpaInferenceUpstreamNotification
     | DeprecationNoticeNotification
     | EnvironmentConnectionNotification
@@ -190,9 +190,9 @@ NOTIFICATION_MODELS: dict[str, type[KnownNotificationPayload]] = {
     "autoApprovalReview/strictReviewRequired": StrictReviewRequiredNotification,
     "command/exec/outputDelta": CommandExecOutputDeltaNotification,
     "configWarning": ConfigWarningNotification,
+    "cpa/inference/body": CpaInferenceBodyNotification,
     "cpa/inference/completed": CpaInferenceCompletedNotification,
     "cpa/inference/error": CpaInferenceErrorNotification,
-    "cpa/inference/event": CpaInferenceEventNotification,
     "cpa/inference/upstream": CpaInferenceUpstreamNotification,
     "deprecationNotice": DeprecationNoticeNotification,
     "error": ErrorNotification,

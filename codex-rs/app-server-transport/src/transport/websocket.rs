@@ -147,13 +147,12 @@ pub async fn start_cpa_websocket_acceptor(
     bind_address: SocketAddr,
     transport_event_tx: mpsc::Sender<TransportEvent>,
     shutdown_token: CancellationToken,
-    auth_policy: WebsocketAuthPolicy,
 ) -> IoResult<JoinHandle<()>> {
     start_websocket_listener(
         bind_address,
         transport_event_tx,
         shutdown_token,
-        auth_policy,
+        WebsocketAuthPolicy::default(),
         Some("/cpa/v1/ws"),
     )
     .await
