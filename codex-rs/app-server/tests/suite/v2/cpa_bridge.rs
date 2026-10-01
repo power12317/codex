@@ -1,4 +1,9 @@
 //! CPA TCP contract tests use a shared fake credential file and a mock upstream.
+#[path = "cpa_bridge/continuity_tests.rs"]
+mod continuity_tests;
+#[path = "cpa_bridge/home_tests.rs"]
+mod home_tests;
+
 use anyhow::Result;
 use app_test_support::ChatGptIdTokenClaims;
 use app_test_support::MockResponsesConfig;
@@ -90,6 +95,12 @@ fn prepare_account(upstream: &MockServer, home: &TempDir) -> Result<()> {
             "unknown_field":{"keep":true}, "codex_cli":{"enabled":true}
         }))?,
     )?;
+    let account_home = home.path().join("state/shared.json");
+    std::fs::create_dir_all(&account_home)?;
+    std::fs::copy(
+        home.path().join("config.toml"),
+        account_home.join("config.toml"),
+    )?;
     Ok(())
 }
 
@@ -103,14 +114,7 @@ async fn launch(upstream: &MockServer, home: &TempDir) -> Result<TestAppServer> 
     let port = listener.local_addr()?.port().to_string();
     drop(listener);
     std::fs::write(home.path().join("port"), &port)?;
-    use sha2::Digest;
     let state = home.path().join("state");
-    let account_home = state.join(format!("{:x}", sha2::Sha256::digest(b"shared.json")));
-    std::fs::create_dir_all(&account_home)?;
-    std::fs::copy(
-        home.path().join("config.toml"),
-        account_home.join("config.toml"),
-    )?;
     TestAppServer::builder()
         .with_codex_home(home.path())
         .with_env_overrides(&[
@@ -119,6 +123,8 @@ async fn launch(upstream: &MockServer, home: &TempDir) -> Result<TestAppServer> 
                 Some(&home.path().display().to_string()),
             ),
             ("CODEX_CPA_AUTH_FILE", None),
+            ("RUST_LOG", None),
+            ("LOG_FORMAT", Some("json")),
             ("CODEX_HOME", Some(&state.display().to_string())),
             ("CODEX_CPA_TEST_STDIN_LIFETIME", Some("1")),
             ("CODEX_CPA_PORT", Some(&port)),
@@ -224,12 +230,16 @@ async fn cpa_lossless_single_inference_and_identity_contract() -> Result<()> {
         prepared["client_metadata"]["thread_id"],
         json!("caller-thread")
     );
-    assert!(prepared["client_metadata"].get("turn_id").is_none());
-    assert!(
-        prepared["client_metadata"]
-            .get("x-codex-turn-metadata")
-            .is_none()
+    assert_eq!(
+        prepared["client_metadata"]["turn_id"],
+        json!("caller-turn-id")
     );
+    let turn: Value = serde_json::from_str(
+        prepared["client_metadata"]["x-codex-turn-metadata"]
+            .as_str()
+            .unwrap(),
+    )?;
+    assert_eq!(turn["turn_id"], json!("caller-turn-id"));
     assert!(prepared.get("headers").is_none());
     assert!(prepared.get("authorization").is_none());
     assert_eq!(
@@ -895,11 +905,7 @@ async fn cpa_nested_unicode_ids_have_independent_persistent_runtimes() -> Result
         &file,
         serde_json::to_vec(&json!({"type":"codex","codex_cli":{"enabled":true}}))?,
     )?;
-    use sha2::Digest;
-    let private_home = home
-        .path()
-        .join("state")
-        .join(format!("{:x}", sha2::Sha256::digest(id.as_bytes())));
+    let private_home = home.path().join("state").join(id);
     std::fs::create_dir_all(&private_home)?;
     std::fs::copy(
         home.path().join("config.toml"),

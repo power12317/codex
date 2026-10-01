@@ -151,9 +151,18 @@ impl Master {
             .filter(|id| only.is_none_or(|only| only == id.as_str()))
         {
             if !workers.contains_key(id) {
-                let home = self
+                let home = self.state.join(id);
+                // Preserve an existing account's configuration and installation identity
+                // when upgrading from the former opaque directory layout.
+                let legacy_home = self
                     .state
                     .join(format!("{:x}", Sha256::digest(id.as_bytes())));
+                if !home.try_exists()? && legacy_home.try_exists()? {
+                    if let Some(parent) = home.parent() {
+                        tokio::fs::create_dir_all(parent).await?;
+                    }
+                    tokio::fs::rename(&legacy_home, &home).await?;
+                }
                 let worker = Worker::start(&self.root, &home, id).await?;
                 workers.insert(id.clone(), worker);
             }
@@ -210,7 +219,21 @@ impl Master {
                     let client = client.clone();
                     requests.spawn(async move {
                         let id = message["id"].clone();
+                        let credential_id = message["params"]["credentialId"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned();
+                        let request_id = message["params"]["requestId"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned();
                         if let Err(err) = master.dispatch(message, &client).await {
+                            crate::cpa_bridge::record_request(
+                                &credential_id,
+                                &request_id,
+                                "cpa.master.error",
+                                json!({"error": err.to_string(), "rpcId": id}),
+                            );
                             let _ = client.send(error(id, 503, &err.to_string())).await;
                         }
                     });

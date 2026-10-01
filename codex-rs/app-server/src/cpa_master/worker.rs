@@ -56,6 +56,14 @@ impl Worker {
             .stderr(Stdio::inherit())
             .kill_on_drop(true)
             .spawn()?;
+        crate::cpa_bridge::record_request(
+            id,
+            "",
+            "cpa.worker.started",
+            json!({
+            "pid": child.id(), "codexHome": home,
+            "configFile": home.join("config.toml"), "credentialFile": root.join(id)}),
+        );
         let stdin = child.stdin.take().context("child stdin")?;
         let stdout = child.stdout.take().context("child stdout")?;
         let worker = Arc::new(Self {

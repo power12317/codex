@@ -16,6 +16,7 @@ use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::sync::Arc;
 
 pub(super) struct UpstreamTransport {
@@ -24,6 +25,7 @@ pub(super) struct UpstreamTransport {
     pub(super) outgoing: Arc<OutgoingMessageSender>,
     pub(super) connection_id: ConnectionId,
     pub(super) request_id: String,
+    pub(super) credential_id: String,
 }
 
 impl UpstreamTransport {
@@ -31,6 +33,32 @@ impl UpstreamTransport {
         &self,
         notification: CpaInferenceUpstreamNotification,
     ) -> Result<(), TransportError> {
+        // stderr is inherited by the master and remains visible with RUST_LOG unset.
+        let mut details = serde_json::to_value(&notification).unwrap_or(Value::Null);
+        if let Some(details) = details.as_object_mut() {
+            // Full payloads remain in the existing upstream notification. Expose the
+            // upstream structured failure so docker logs identifies invalid input too.
+            if let Some(error) = details
+                .get("body")
+                .and_then(Value::as_str)
+                .and_then(|body| serde_json::from_str::<Value>(body).ok())
+                .and_then(|body| body.get("error").cloned())
+            {
+                details.insert(
+                    "error".into(),
+                    serde_json::json!({
+                        "code": error["code"], "type": error["type"], "message": error["message"],
+                    }),
+                );
+            }
+            details.remove("body");
+        }
+        let event = if details["kind"] == "response" {
+            "cpa.request.upstream.response"
+        } else {
+            "cpa.request.upstream"
+        };
+        record(&self.credential_id, &self.request_id, event, details);
         if self
             .outgoing
             .send_server_notification_to_connection_and_wait(
@@ -166,4 +194,13 @@ fn oai_lb_node(headers: &HeaderMap) -> Option<String> {
             .bytes()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-'))
     .then(|| node.to_string())
+}
+
+/// JSONL to stderr only: stdout is reserved for JSON-RPC. Headers are already redacted.
+pub(crate) fn record(credential_id: &str, request_id: &str, event: &str, details: Value) {
+    let record = serde_json::json!({"timestamp": chrono::Utc::now().to_rfc3339(),
+        "level": "INFO", "target": "codex_app_server::cpa_bridge",
+        "fields": {"event.name": event, "credentialId": credential_id,
+        "rpcRequestId": request_id, "details": details}});
+    let _ = writeln!(std::io::stderr().lock(), "{record}");
 }

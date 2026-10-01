@@ -1,6 +1,6 @@
 //! Prepare one caller-owned Responses request without creating an agent turn.
 use super::*;
-use crate::config::Config;
+use codex_protocol::ResponseItemId;
 use codex_protocol::models::BaseInstructions;
 use codex_tools::FreeformTool;
 use codex_tools::ResponsesApiTool;
@@ -46,44 +46,12 @@ const WORKER_OWNED_METADATA_KEYS: &[&str] = &[
 /// Uses the native prompt/model builder and request options, without response parsing
 /// or a tool runtime. Caller-only Responses options survive serialization explicitly.
 pub async fn prepare_inference_request(
-    config: &Config,
-    auth: Arc<AuthManager>,
+    session: &InferenceSession,
     model_info: &ModelInfo,
-    installation_id: &str,
-    session_id: &str,
     request: &Map<String, Value>,
 ) -> anyhow::Result<(Value, ApiResponsesOptions)> {
-    let thread_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, session_id.as_bytes()).to_string();
-    let client = ModelClient::new(
-        Some(auth),
-        AgentIdentityAuthPolicy::JwtOnly,
-        ThreadId::from_string(&thread_id)?,
-        config.model_provider.clone(),
-        SessionSource::Cli,
-        "codex_cli_rs".into(),
-        request
-            .get("text")
-            .and_then(|text| text.get("verbosity"))
-            .map(|value| serde_json::from_value(value.clone()))
-            .transpose()?
-            .or(config.model_verbosity),
-        /*content_item_kinds_enabled*/ false,
-        /*reasoning_effort_override_enabled*/ false,
-        /*enable_request_compression*/ false,
-        /*include_timing_metrics*/ false,
-        /*beta_features_header*/ None,
-        /*concurrent_reasoning_summaries_enabled*/ false,
-        /*attestation_provider*/ None,
-        config.http_client_factory(),
-        config.workspace_routing_context(),
-        Vec::new(),
-    );
-    let metadata = CodexResponsesMetadata::new(
-        installation_id.into(),
-        session_id.into(),
-        thread_id,
-        session_id.into(),
-    );
+    let client = &session.session.client;
+    let metadata = &session.metadata;
     let mut input = request.get("input").cloned().unwrap_or_else(|| json!([]));
     if input.is_string() {
         input = json!([{"type":"message","role":"user","content":[{"type":"input_text","text":input}]}]);
@@ -99,7 +67,17 @@ pub async fn prepare_inference_request(
             item["content"] = json!([{"type":"input_text","text":item["content"]}]);
         }
     }
-    let input: Vec<ResponseItem> = serde_json::from_value(input)?;
+    let mut input: Vec<ResponseItem> = serde_json::from_value(input)?;
+    for item in &mut input {
+        if let Some(prefix) = item.id_prefix()
+            && let Some(id) = item.id()
+            && let Some((actual, suffix)) = id.split_once('_')
+            && !suffix.is_empty()
+            && actual != prefix
+        {
+            item.set_id(Some(ResponseItemId::with_suffix(prefix, suffix)));
+        }
+    }
     anyhow::ensure!(
         !input.iter().any(|item| matches!(item, ResponseItem::Other)),
         "unsupported input item"
@@ -197,7 +175,7 @@ pub async fn prepare_inference_request(
         effort,
         summary,
         service_tier,
-        &metadata,
+        metadata,
         /*include_internal*/ false,
     )?;
     let mut body = serde_json::to_value(built)?;
@@ -248,10 +226,16 @@ pub async fn prepare_inference_request(
             }
         }
     }
-    let options = client
-        .new_session()
-        .build_responses_options(&metadata, Compression::None, model_info.use_responses_lite)
+    let mut options = session
+        .session
+        .build_responses_options(metadata, Compression::None, model_info.use_responses_lite)
         .await;
+    // Native ChatGPT transport uses session_id for cache affinity. Keep the business
+    // session in metadata while matching the effective caller cache key on the wire.
+    if let Some(cache_key) = InferenceIdentity::from_request(request).prompt_cache_key {
+        body["prompt_cache_key"] = json!(cache_key);
+        options.session_id = Some(cache_key);
+    }
     Ok((body, options))
 }
 

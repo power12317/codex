@@ -27,6 +27,9 @@
 
 mod inference;
 pub use inference::prepare_inference_request;
+mod inference_session;
+pub use inference_session::InferenceIdentity;
+pub use inference_session::InferenceSession;
 
 use std::collections::HashMap;
 use std::sync::Arc;

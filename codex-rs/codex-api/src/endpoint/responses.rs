@@ -142,7 +142,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
     }
 
     /// Send a prepared Responses request and return the original HTTP byte stream.
-    /// This boundary does not parse SSE or interpret model output.
+    /// Only routing metadata is observed; no model output is interpreted or executed.
     pub async fn stream_prepared_body(
         &self,
         body: Value,
@@ -158,7 +158,8 @@ impl<T: HttpTransport> ResponsesClient<T> {
         if let Some(subagent) = subagent_header(&options.session_source) {
             insert_header(&mut headers, "x-openai-subagent", &subagent);
         }
-        self.session
+        let response = self
+            .session
             .stream_encoded_json_with(Method::POST, "/responses", headers, Some(body), |request| {
                 request.compression = match options.compression {
                     Compression::None => RequestCompression::None,
@@ -169,7 +170,11 @@ impl<T: HttpTransport> ResponsesClient<T> {
                     HeaderValue::from_static("text/event-stream"),
                 );
             })
-            .await
+            .await?;
+        Ok(match options.turn_state {
+            Some(state) => crate::sse::turn_state::observe(response, state),
+            None => response,
+        })
     }
 
     async fn stream_encoded(

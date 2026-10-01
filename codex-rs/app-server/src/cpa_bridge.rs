@@ -1,4 +1,5 @@
 //! CPA IPC v3 boundary. This module deliberately has no ThreadManager or tool runtime.
+mod contexts;
 mod login;
 mod upstream;
 use crate::outgoing_message::ConnectionId;
@@ -30,6 +31,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
+pub(crate) use upstream::record as record_request;
 
 const UPSTREAM: &str = "985cf47a4eb6084b2ff6b30ebdb1216acda85bb4";
 
@@ -37,6 +39,7 @@ type BridgeResult<T> = std::result::Result<T, JSONRPCErrorError>;
 
 pub(crate) struct CpaBridge {
     credential_id: Option<String>,
+    contexts: Mutex<contexts::Contexts>,
     login: Mutex<Option<login::Login>>,
     auth: Arc<AuthManager>,
     config: Arc<Config>,
@@ -66,6 +69,7 @@ impl CpaBridge {
 
         Arc::new(Self {
             credential_id,
+            contexts: Mutex::new(contexts::Contexts::default()),
             login: Mutex::new(None),
             auth,
             config,
@@ -125,23 +129,46 @@ impl CpaBridge {
         id: ConnectionRequestId,
         params: CpaInferenceStartParams,
     ) -> BridgeResult<()> {
-        validate(&params)?;
-        if self.credential_id.as_deref() != Some(params.credential_id.as_str()) {
-            return Err(failure(/*status*/ 403, "credentialId mismatch"));
-        }
-        self.require_enabled()?;
-        self.bound_auth()?;
-        let token = CancellationToken::new();
-        {
-            let mut active = self
-                .active
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if active.contains_key(&(id.connection_id, params.request_id.clone())) {
-                return Err(failure(/*status*/ 409, "Duplicate active requestId"));
+        upstream::record(
+            &params.credential_id,
+            &params.request_id,
+            "cpa.request.start",
+            json!({
+                "source": codex_core::InferenceIdentity::from_request(&params.request),
+                "rpcSessionId": params.session_id,
+                "codexHome": self.config.codex_home,
+            }),
+        );
+        let prepared = (|| -> BridgeResult<_> {
+            validate(&params)?;
+            if self.credential_id.as_deref() != Some(params.credential_id.as_str()) {
+                return Err(failure(/*status*/ 403, "credentialId mismatch"));
             }
-            active.insert((id.connection_id, params.request_id.clone()), token.clone());
-        }
+            self.require_enabled()?;
+            self.bound_auth()?;
+            let session = self
+                .contexts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(self, &params)
+                .map_err(|error| failure(/*status*/ 400, &error.to_string()))?;
+            let token = CancellationToken::new();
+            {
+                let mut active = self
+                    .active
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if active.contains_key(&(id.connection_id, params.request_id.clone())) {
+                    return Err(failure(/*status*/ 409, "Duplicate active requestId"));
+                }
+                active.insert((id.connection_id, params.request_id.clone()), token.clone());
+            }
+            Ok((session, token))
+        })();
+        let (session, token) = prepared.inspect_err(|error| {
+            upstream::record(&params.credential_id, &params.request_id, "cpa.request.error",
+                json!({"error": error.message, "httpStatus": error.data.as_ref().map(|data| &data["httpStatus"])}));
+        })?;
         let bridge = self.clone();
         tokio::spawn(async move {
             let started = AtomicBool::new(/*v*/ false);
@@ -154,9 +181,21 @@ impl CpaBridge {
                         if auth_changes.changed().await.is_err() || bridge.bound_auth().is_err() { break; }
                     }
                 } => Err(failure(/*status*/ 401, "Managed account changed")),
-                result = bridge.run(&id, &params, &started) => result,
+                result = bridge.run(&id, &params, &started, &session) => result,
             };
             let succeeded = result.is_ok();
+            upstream::record(
+                &params.credential_id,
+                &params.request_id,
+                if succeeded {
+                    "cpa.request.completed"
+                } else {
+                    "cpa.request.error"
+                },
+                json!({"error": result.as_ref().err().map(|error| &error.message),
+                    "turnState": session.turn_state(),
+                    "turnStateLength": session.turn_state().map(str::len)}),
+            );
             if let Err(error) = result {
                 if started.load(Ordering::Acquire) {
                     bridge
@@ -222,6 +261,7 @@ impl CpaBridge {
         &self,
         id: &ConnectionRequestId,
         params: &CpaInferenceStartParams,
+        session: &codex_core::InferenceSession,
     ) -> BridgeResult<StreamResponse> {
         self.auth.reload().await;
         self.config_manager
@@ -295,16 +335,23 @@ impl CpaBridge {
             .models
             .get_model_info(model, &self.config.to_models_manager_config())
             .await;
-        let (body, options) = codex_core::prepare_inference_request(
-            &self.config,
-            self.auth.clone(),
-            &model_info,
-            &self.installation_id,
-            &params.session_id,
-            &params.request,
-        )
-        .await
-        .map_err(|error| failure(/*status*/ 400, &error.to_string()))?;
+        let (body, options) =
+            codex_core::prepare_inference_request(session, &model_info, &params.request)
+                .await
+                .map_err(|error| failure(/*status*/ 400, &error.to_string()))?;
+        upstream::record(
+            &params.credential_id,
+            &params.request_id,
+            "cpa.request.mapping",
+            json!({
+                "source": codex_core::InferenceIdentity::from_request(&params.request),
+                "worker": {"session_id": body["client_metadata"]["session_id"],
+                    "thread_id": body["client_metadata"]["thread_id"], "turn_id": body["client_metadata"]["turn_id"]},
+                "promptCacheKey": body["prompt_cache_key"],
+                "transportSessionId": options.session_id, "transportThreadId": options.thread_id,
+                "turnStateSent": options.extra_headers.get("x-codex-turn-state").and_then(|value| value.to_str().ok()),
+            }),
+        );
         ResponsesClient::new(
             upstream::UpstreamTransport {
                 inner: ReqwestTransport::from_http_client(client),
@@ -312,6 +359,7 @@ impl CpaBridge {
                 outgoing: self.outgoing.clone(),
                 connection_id: id.connection_id,
                 request_id: params.request_id.clone(),
+                credential_id: params.credential_id.clone(),
             },
             provider,
             auth_provider_from_auth(&auth),
@@ -326,10 +374,11 @@ impl CpaBridge {
         id: &ConnectionRequestId,
         params: &CpaInferenceStartParams,
         started: &AtomicBool,
+        session: &codex_core::InferenceSession,
     ) -> BridgeResult<()> {
         let mut recovery = self.auth.unauthorized_recovery();
         let mut stream = loop {
-            match self.open(id, params).await {
+            match self.open(id, params, session).await {
                 Ok(stream) => break stream,
                 Err(error)
                     if error.data.as_ref().is_some_and(|d| d["httpStatus"] == 401)

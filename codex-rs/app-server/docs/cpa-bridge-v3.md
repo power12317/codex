@@ -8,8 +8,13 @@ chat alternatives concerning body notifications.
 `credentialId` is CPA's existing file-backed `Auth.ID`: the case-sensitive path
 relative to the shared auth directory on Linux. There is no separate worker ID,
 account ID, credential filename setting, or owner field in the bridge contract.
-The master uses that same ID for its per-credential process map. Private state
-directories may encode/hash it internally without creating another public ID.
+The master uses that same ID for its per-credential process map and private state
+directory: `CODEX_HOME/<credentialId>/`. Original names, extensions, spaces and
+nested directories are preserved. For example, with the default state root,
+`team/account.json` uses `/var/lib/codex/team/account.json/`. When that readable
+directory is absent, an existing legacy hash directory is moved there before the
+worker starts. If both exist, the readable directory takes precedence and the
+legacy directory is left untouched.
 
 The shared file has `codex_cli: {enabled: true|false}`. Only a Codex file with
 `enabled: true` and without top-level `disabled: true` runs an account process.
@@ -58,6 +63,26 @@ log entries may precede acceptance. CPA logs the raw bytes and applies its norma
 SSE/response processing. The master/worker do not parse function-call responses.
 Concurrent requests for one credential must remain supported.
 
+Source `session_id`, `thread_id`, `turn_id`, `prompt_cache_key`, `parent_turn_id`
+and `root_turn_id` are read from top-level request fields, then flat
+`client_metadata`, then its JSON-encoded `x-codex-turn-metadata` (in that order).
+The credential and CPA `sessionId` form a namespace for deterministic native
+session/thread UUIDs; different source sessions/threads retain distinct mappings.
+Source turn and root/parent turn IDs survive in native metadata. Installation,
+device and authentication identities remain worker-owned. The supplied cache key
+(including CPA's already scoped value) is used both in the request body and the
+native cache-affinity `session-id` transport header; it does not replace the
+business session identity in metadata.
+
+Each worker retains a native inference session by CPA scope + source session +
+source thread + source turn. Requests in that turn reuse the first valid upstream
+`x-codex-turn-state`, obtained from HTTP headers or native `response.metadata`.
+Other turns, credentials and source sessions/threads never share that state.
+No source turn ID means a fresh session per RPC, reused only for that RPC's auth
+recovery. Contexts live until worker exit; no arbitrary capacity eviction is used.
+Only routing metadata is observed; original body bytes remain unchanged and no
+function call is executed.
+
 ## OAuth
 
 - `cpa/auth/login/start {credentialId}` -> `{loginId, authUrl, state}`.
@@ -86,6 +111,27 @@ accepted HTTP streams are never replayed. Body EOF is transport completion, not
 an interpretation of any SSE event. All account activity ends when the master
 has reaped the disabled child's process. Previously transmitted upstream work
 cannot be recalled. The private state directory persists for reenable.
+
+## Historical item IDs
+
+Historical item IDs with a wrong type prefix are corrected using the native
+item prefix and original suffix. Valid IDs, `call_id`, tool inputs and output
+associations remain unchanged.
+
+## Worker diagnostics
+
+Default-visible JSONL stderr events include `cpa.worker.started` with credential
+name, PID, CODEX_HOME and config path; `cpa.request.start`, `.mapping`, `.upstream`,
+`.completed` and `.error` with `credentialId` and `rpcRequestId`. No `RUST_LOG`
+setting is required. Validation failures and master dispatch errors are logged.
+Mapping events distinguish source IDs, native metadata IDs, transport affinity,
+cache key and actual turn state. Upstream events include status, redacted headers
+and structured failure code/type/message. Authorization and cookies stay masked;
+full request/response payloads continue through the existing CPA notifications.
+
+`rpcRequestId` is the RPC UUID, not CPA's eight-character external log ID.
+Use the actual upstream `x-request-id`, also present in CPA's detailed request
+log, to correlate the two. stdout remains exclusively the JSON-RPC channel.
 
 ## Running outside the image
 

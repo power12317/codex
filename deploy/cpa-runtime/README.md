@@ -46,8 +46,25 @@ same internal port. The existing CPA and gost services need no port changes.
 `credentialId` is CPA's original path relative to the shared auth directory,
 including nested directories, capitalization, spaces and Unicode. It is the
 only account-routing identity. Each child has a persistent private CODEX_HOME
-under a hash of that ID; the hash is not another business ID. Credentials are
-read and refreshed in the original shared file. There is no mirrored auth.json.
+named after that original relative path, including the file extension:
+`account.json` uses `/var/lib/codex/account.json/`, and `team/My Account.JSON`
+uses `/var/lib/codex/team/My Account.JSON/`. A worker's optional configuration
+file is directly inside that directory, for example
+`/var/lib/codex/account.json/config.toml`; there is no extra `.codex` level.
+When first starting an account after upgrading, the master moves its old hash
+directory to the readable path if the latter does not exist, preserving all
+state. If both paths exist, it uses the readable directory and leaves the old
+one untouched. Credentials are still read and refreshed in the original shared
+file. There is no mirrored auth.json.
+
+Worker command lines still show `--listen stdio://`: their private configuration
+is selected by `CODEX_HOME`, not a config-file command-line flag. `docker logs
+codex-master` now includes a `cpa.worker.started` JSON event mapping the PID to
+its credential name, CODEX_HOME and `config.toml` path. Request lifecycle, identity
+mapping and upstream status/header events are visible by default on stderr,
+without setting `RUST_LOG`. The RPC UUID and upstream `x-request-id` correlate
+worker events with CPA's existing detailed logs; the RPC UUID is not CPA's
+eight-character outer log ID. Authentication headers and cookies are redacted.
 
 The master scans on startup and every 500 ms. It starts an account only when the
 file has `type: "codex"`, `codex_cli.enabled: true`, and no `disabled: true`.
