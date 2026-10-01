@@ -503,23 +503,8 @@ fn validate(params: &CpaInferenceStartParams) -> BridgeResult<()> {
             ));
         }
     }
-    // Callers supply Responses semantics, never transport/auth/installation metadata.
-    for key in [
-        "headers",
-        "authorization",
-        "Authorization",
-        "cookies",
-        "client_metadata",
-        "installation_id",
-        "account_id",
-    ] {
-        if r.contains_key(key) {
-            return Err(failure(
-                /*status*/ 400,
-                "Caller transport or identity metadata is unsupported",
-            ));
-        }
-    }
+    // Caller transport/auth/device metadata is sanitized during native request preparation.
+    // Business Responses fields remain available to the worker-owned request builder.
     Ok(())
 }
 

@@ -9,6 +9,40 @@ use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
 
+const WORKER_OWNED_METADATA_KEYS: &[&str] = &[
+    "x-codex-installation-id",
+    "x-codex-turn-metadata",
+    "x-codex-window-id",
+    "x-codex-parent-thread-id",
+    "x-codex-routing-hint",
+    "x-codex-turn-state",
+    "x-openai-subagent",
+    "installation_id",
+    "session_id",
+    "thread_id",
+    "turn_id",
+    "window_id",
+    "context_window_id",
+    "parent_thread_id",
+    "parent_turn_id",
+    "root_turn_id",
+    "agent_name",
+    "request_kind",
+    "thread_source",
+    "turn_trigger",
+    "sandbox",
+    "sandbox_mode",
+    "auto_review_enabled",
+    "node_repl_auto_review_required",
+    "node_repl_disabled",
+    "workspaces",
+    "tool_namespaces_info",
+    "turn_started_at_unix_ms",
+    "history_ingest_requested",
+    "analytics_enabled",
+    "mcp_attribution",
+];
+
 /// Uses the native prompt/model builder and request options, without response parsing
 /// or a tool runtime. Caller-only Responses options survive serialization explicitly.
 pub async fn prepare_inference_request(
@@ -182,10 +216,31 @@ pub async fn prepare_inference_request(
                 | "stream"
                 | "service_tier"
                 | "client_metadata"
+                | "headers"
+                | "authorization"
+                | "Authorization"
+                | "cookies"
+                | "installation_id"
+                | "account_id"
+                | "x-codex-installation-id"
+                | "x-codex-turn-metadata"
+                | "x-codex-window-id"
+                | "x-codex-parent-thread-id"
+                | "x-codex-routing-hint"
+                | "x-codex-turn-state"
+                | "session_id"
+                | "thread_id"
+                | "turn_id"
+                | "window_id"
+                | "context_window_id"
+                | "parent_thread_id"
+                | "parent_turn_id"
+                | "root_turn_id"
         ) {
             body[key] = value.clone();
         }
     }
+    merge_caller_client_metadata(&mut body, request);
     if let Some(reasoning) = reasoning.and_then(Value::as_object) {
         for (key, value) in reasoning {
             if !matches!(key.as_str(), "effort" | "summary") {
@@ -198,4 +253,23 @@ pub async fn prepare_inference_request(
         .build_responses_options(&metadata, Compression::None, model_info.use_responses_lite)
         .await;
     Ok((body, options))
+}
+
+fn merge_caller_client_metadata(body: &mut Value, request: &Map<String, Value>) {
+    let Some(caller_metadata) = request.get("client_metadata").and_then(Value::as_object) else {
+        return;
+    };
+    let Some(native_metadata) = body
+        .get_mut("client_metadata")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+
+    for (key, value) in caller_metadata {
+        if WORKER_OWNED_METADATA_KEYS.contains(&key.as_str()) || native_metadata.contains_key(key) {
+            continue;
+        }
+        native_metadata.insert(key.clone(), value.clone());
+    }
 }

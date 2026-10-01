@@ -141,7 +141,7 @@ async fn cpa_lossless_single_inference_and_identity_contract() -> Result<()> {
     let upstream = MockServer::start().await;
     let home = TempDir::new()?;
     let marker = home.path().join("tool-must-not-run");
-    let request = json!({"model":"mock-model","stream":true,"instructions":"keep exactly", "input":[], "tools":[{"type":"function","name":"shell","parameters":{"type":"object"}}], "tool_choice":{"type":"function","name":"shell"}, "future_extension":{"untouched":true}});
+    let request = json!({"model":"mock-model","stream":true,"instructions":"keep exactly", "input":[], "tools":[{"type":"function","name":"shell","parameters":{"type":"object"}}], "tool_choice":{"type":"function","name":"shell"}, "client_metadata":{"x-codex-installation-id":"caller-installation","x-codex-turn-metadata":"caller-turn-metadata","x-codex-window-id":"caller-window","session_id":"caller-session","thread_id":"caller-thread","turn_id":"caller-turn-id","business_tag":"keep-me"}, "headers":{"authorization":"caller-secret"}, "authorization":"caller-secret", "future_extension":{"untouched":true}});
     let events = [
         json!({"type":"response.created","response":{"id":"resp"}}),
         json!({"type":"future.event","payload":{"untouched":true,"text":"你好"}}),
@@ -204,6 +204,34 @@ async fn cpa_lossless_single_inference_and_identity_contract() -> Result<()> {
     assert_eq!(prepared["store"], json!(false));
     assert_eq!(prepared["include"], json!(["reasoning.encrypted_content"]));
     assert!(prepared["client_metadata"].is_object());
+    assert_eq!(
+        prepared["client_metadata"]["business_tag"],
+        json!("keep-me")
+    );
+    assert_ne!(
+        prepared["client_metadata"]["x-codex-installation-id"],
+        json!("caller-installation")
+    );
+    assert_ne!(
+        prepared["client_metadata"]["x-codex-window-id"],
+        json!("caller-window")
+    );
+    assert_ne!(
+        prepared["client_metadata"]["session_id"],
+        json!("caller-session")
+    );
+    assert_ne!(
+        prepared["client_metadata"]["thread_id"],
+        json!("caller-thread")
+    );
+    assert!(prepared["client_metadata"].get("turn_id").is_none());
+    assert!(
+        prepared["client_metadata"]
+            .get("x-codex-turn-metadata")
+            .is_none()
+    );
+    assert!(prepared.get("headers").is_none());
+    assert!(prepared.get("authorization").is_none());
     assert_eq!(
         logged_request["headers"]["authorization"],
         json!(["[REDACTED]"])
