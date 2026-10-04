@@ -3,6 +3,11 @@
 Contract identifier: **V3-SEP-20260927**. This document supersedes the earlier
 chat alternatives concerning body notifications.
 
+Current upstream: official `openai/codex` default branch `main`, commit
+`afb436df8b70bb5bc57b86d9a3e829968988cd21`, fetched on 2026-10-04 at
+20:42:10 +08:00. This is a default-branch source merge, not a release-tag rebase.
+The CPA v3 contract and the dedicated `codex/cpa-managed-auth` image remain unchanged.
+
 ## Identity and state
 
 `credentialId` is CPA's existing file-backed `Auth.ID`: the case-sensitive path

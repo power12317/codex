@@ -214,7 +214,71 @@ accepts a request, no model retry or agent continuation occurs. Transport retry
 configuration is zero because the upstream `max_attempts` field counts additional
 attempts after the initial request.
 
-## Remaining broader regression failures
+## 2026-10-04 official main merge
+
+Fetched the official `https://github.com/openai/codex.git` default branch `main`
+at 2026-10-04 20:42:10 +08:00. The pinned merge input is
+`afb436df8b70bb5bc57b86d9a3e829968988cd21` ("Honor server reasoning summary
+defaults in new TUI threads", #50811), 356 commits after the previous upstream
+baseline. The fork parent is `46f9fcc77397db2033bb010c15838684aa8c8719`.
+This is an ordinary merge preserving both histories, not a release-tag rebase.
+
+The five conflicts were generated artifacts: the two precomputed export bundles,
+two TypeScript notification exports, and the config schema. They were regenerated
+from the combined Rust types using `just write-app-server-schema`, its
+`--experimental` variant, and `just write-config-schema`. The CPA notification
+definitions are identical to the fork parent's definitions. `just bazel-lock-update`
+succeeded and left the merged upstream lock unchanged; Bazel reported advisory
+dependency-version/annotation warnings.
+
+All 41 fork-added files survived. Aside from this validation record, the only
+changed fork-added files are the current upstream provenance in the v3 document,
+bridge capability constant, and Docker label. No compatibility source rewrite
+was required for the upstream model catalog/provider changes, Responses Lite
+tool-catalog construction, auth-storage telemetry, or Responses error handling.
+
+Validation on the macOS arm64 development host:
+
+- CPA tests plus all `codex-api`, `codex-app-server-protocol`, and `codex-login`
+  tests: **792 passed, 1 failed** out of 793 selected tests (nextest run
+  `3f1fc1b2-2e3b-41d9-96c4-b567d3b96251`). All selected CPA, protocol, and login
+  tests passed, including manual OAuth, shared-file refresh/disable, readable-home
+  migration, source-turn/concurrent/credential isolation, 30 historical tool-call
+  pairs, original response bytes, and default-visible redacted logs.
+- Native `client::` tests plus model-provider and models-manager unit tests:
+  **192/192 passed** (run `195529f7-65d9-47bd-b954-391265c0f3cd`).
+- `cargo check --locked -p codex-cli -p codex-code-mode-host --bins` passed.
+  The default Deno V8 download returned HTTP 404; rerunning with the existing
+  deployment fetcher's checksum-verified Codex V8 150.4.0 archive/binding pair
+  succeeded. This uses the same artifact source already configured in Docker,
+  without a V8 version change or a new download policy.
+- Scoped `just fix` for app-server, core, codex-api, login and app-server-protocol
+  completed successfully. It simplified a time-provider coercion while preserving
+  its inferred type and removed one unused import in an upstream scenario test;
+  neither change alters the CPA path or weakens an assertion.
+- `just fmt` completed. The fork delta against the pinned official commit passes
+  `git diff --check`. Checking the entire merge also reports trailing padding in
+  11 upstream TUI snapshot files; each is byte-identical to upstream and retained
+  as rendered snapshot content. The remaining staged files pass the whitespace
+  check without exceptions.
+- The sole API failure remains
+  `files::tests::upload_openai_file_reports_blob_transport_diagnostics_without_sas`
+  at `message.contains("failed after")`. An isolated rerun also failed (run
+  `79b7bc2a-548a-40fd-bfd2-714274b0b8f3`). The same failure was recorded before
+  this merge below, and its source file is unchanged by this upgrade. Its root
+  cause remains unresolved; no assertion was removed or relaxed. This is not a
+  claim that the complete API suite passed.
+
+The protocol remains v3, with the existing TCP/WebSocket methods and port 38317.
+Worker home names, legacy migration, source identity/turn state, no-turn-ID
+fallback, inference-only behavior and CPA log correlation remain unchanged.
+The dedicated `cpa-managed-auth`/immutable-SHA dual-architecture image workflow
+is unchanged. No CPA/CPAMP files, deployment settings, extra ports/keys, capacity
+policies, refresh locks, or server configurations were introduced or modified.
+Linux image execution is delegated to that workflow; this merge does not claim
+local Linux container validation or deployment.
+
+## Remaining broader regression failures (historical)
 
 These are the 27 failures and one timeout from the retry run. This table records
 observations, not a claim that the baseline necessarily has the same failures.
