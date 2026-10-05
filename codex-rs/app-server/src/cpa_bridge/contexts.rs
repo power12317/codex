@@ -12,8 +12,21 @@ const MAX_CONTEXTS: usize = 1024;
 #[derive(Hash, PartialEq, Eq)]
 struct Key {
     scope: String,
-    conversation: Option<String>,
+    session: Option<String>,
+    thread: Option<String>,
     turn: Option<String>,
+    provenance: Provenance,
+}
+
+#[derive(Default, Hash, PartialEq, Eq)]
+struct Provenance {
+    parent_thread: Option<String>,
+    thread_source: Option<String>,
+    subagent_kind: Option<String>,
+    subagent_header: Option<String>,
+    agent_name: Option<String>,
+    parent_turn: Option<String>,
+    root_turn: Option<String>,
 }
 
 struct Entry<T> {
@@ -83,16 +96,29 @@ impl Contexts {
         params: &codex_app_server_protocol::CpaInferenceStartParams,
     ) -> anyhow::Result<Arc<InferenceSession>> {
         let mut source = InferenceIdentity::from_request(&params.request);
+        let scope = serde_json::to_string(&(&params.credential_id, &params.session_id))?;
+        // Validate even cache hits; caller identity values may later be projected into responses.
+        source.map(&scope)?;
         let key = Key {
             scope: params.session_id.clone(),
-            conversation: source.conversation_key().map(str::to_owned),
+            session: source.session_key().map(str::to_owned),
+            thread: source.thread_key().map(str::to_owned),
             turn: source.turn_id.clone(),
+            provenance: Provenance {
+                parent_thread: source.parent_thread_id.clone(),
+                thread_source: source.thread_source.clone(),
+                subagent_kind: source.subagent_kind.clone(),
+                subagent_header: source.subagent_header.clone(),
+                agent_name: source.agent_name.clone(),
+                parent_turn: source.parent_turn_id.clone(),
+                root_turn: source.root_turn_id.clone(),
+            },
         };
-        self.get_or_insert(key, Instant::now(), || {
+        let title = source.is_title();
+        let mut create = || {
             source
                 .turn_id
                 .get_or_insert_with(|| uuid::Uuid::now_v7().to_string());
-            let scope = serde_json::to_string(&(&params.credential_id, &params.session_id))?;
             InferenceSession::new(
                 &bridge.config,
                 bridge.auth.clone(),
@@ -100,7 +126,12 @@ impl Contexts {
                 &scope,
                 &source,
             )
-        })
+        };
+        // Titles associate with the same logical IDs but never retain a turn context.
+        if title {
+            return create().map(Arc::new);
+        }
+        self.get_or_insert(key, Instant::now(), create)
     }
 }
 

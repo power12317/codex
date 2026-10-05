@@ -1,6 +1,8 @@
 //! CPA IPC v3 boundary. This module deliberately has no ThreadManager or tool runtime.
 mod contexts;
+mod identity_response;
 mod login;
+mod response_stream;
 mod upstream;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
@@ -205,7 +207,12 @@ impl CpaBridge {
                     "turnState": session.turn_state(),
                     "turnStateLength": session.turn_state().map(str::len)}),
             );
-            if let Err(error) = result {
+            if let Err(mut error) = result {
+                identity_response::IdentityResponse::new(
+                    codex_core::InferenceIdentity::from_request(&params.request),
+                    session.mapping(),
+                )
+                .failure(&mut error);
                 if started.load(Ordering::Acquire) {
                     bridge
                         .outgoing
@@ -349,15 +356,6 @@ impl CpaBridge {
                 .await
                 .map_err(|error| failure(/*status*/ 400, &format!("{error:#}")))?;
         let source = codex_core::InferenceIdentity::from_request(&params.request);
-        let source_ids: Vec<_> = [
-            &source.session_id,
-            &source.thread_id,
-            &source.prompt_cache_key,
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
-        let source_ids_disagree = source_ids.windows(2).any(|pair| pair[0] != pair[1]);
         upstream::record(
             &params.credential_id,
             &params.request_id,
@@ -367,8 +365,8 @@ impl CpaBridge {
                 "worker": {"session_id": body["client_metadata"]["session_id"],
                     "thread_id": body["client_metadata"]["thread_id"], "turn_id": body["client_metadata"]["turn_id"]},
                 "promptCacheKey": body["prompt_cache_key"],
-                "identityPolicy": "root-thread-session-cache-unified",
-                "sourceIdsDisagree": source_ids_disagree,
+                "identityPolicy": "session-root-and-thread-hierarchy",
+                "requestPurpose": if source.is_title() { "thread_title" } else { "conversation" },
                 "syntheticTurn": source.turn_id.is_none(),
                 "transportSessionId": options.session_id, "transportThreadId": options.thread_id,
                 "turnStateSent": options.extra_headers.get("x-codex-turn-state").and_then(|value| value.to_str().ok()),
@@ -421,7 +419,12 @@ impl CpaBridge {
                 Err(error) => return Err(error),
             }
         };
-        // Allowlist excludes cookies, bearer credentials, and internal routing headers.
+        let identities = identity_response::IdentityResponse::new(
+            codex_core::InferenceIdentity::from_request(&params.request),
+            session.mapping(),
+        );
+        // Only explicit public identity projections are added to the existing allowlist.
+        // Cookies, bearer credentials and opaque routing state remain private headers.
         let mut headers = BTreeMap::new();
         for name in [
             "content-type",
@@ -429,6 +432,11 @@ impl CpaBridge {
             "retry-after",
             "openai-model",
             "openai-processing-ms",
+            "session-id",
+            "thread-id",
+            "x-codex-parent-thread-id",
+            "x-codex-window-id",
+            "x-codex-turn-metadata",
         ] {
             let values: Vec<_> = stream
                 .headers
@@ -440,6 +448,19 @@ impl CpaBridge {
                 headers.insert(name.to_owned(), values);
             }
         }
+        let mut translated_headers =
+            serde_json::to_value(&headers).map_err(|error| failure(502, &error.to_string()))?;
+        if let Some(fields) = translated_headers.as_object_mut() {
+            identities.fields(fields);
+        }
+        let headers = serde_json::from_value(translated_headers)
+            .map_err(|error| failure(502, &error.to_string()))?;
+        let content_type = stream
+            .headers
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("text/event-stream");
+        let mut response = response_stream::ResponseStream::new(identities, content_type);
         self.outgoing
             .send_response(
                 id.clone(),
@@ -453,18 +474,34 @@ impl CpaBridge {
         started.store(true, Ordering::Release);
         while let Some(chunk) = stream.bytes.next().await {
             let bytes = chunk.map_err(|error| api_failure(ApiError::Transport(error)))?;
+            let translated = response
+                .push(&bytes)
+                .map_err(|error| failure(502, &error.to_string()))?;
+            self.send_body(id, &params.request_id, &translated).await?;
+        }
+        self.send_body(id, &params.request_id, &response.finish())
+            .await?;
+        Ok(())
+    }
+    async fn send_body(
+        &self,
+        id: &ConnectionRequestId,
+        request_id: &str,
+        bytes: &[u8],
+    ) -> BridgeResult<()> {
+        for bytes in bytes.chunks(64 * 1024) {
             if !self
                 .outgoing
                 .send_server_notification_to_connection_and_wait(
                     id.connection_id,
                     ServerNotification::CpaInferenceBody(CpaInferenceBodyNotification {
-                        request_id: params.request_id.clone(),
+                        request_id: request_id.to_owned(),
                         body_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
                     }),
                 )
                 .await
             {
-                return Err(failure(/*status*/ 499, "Connection closed"));
+                return Err(failure(499, "Connection closed"));
             }
         }
         Ok(())
@@ -480,6 +517,7 @@ pub(crate) fn capabilities() -> CpaCapabilitiesReadResponse {
         upstream_logs: true,
         upstream_body_logs: true,
         raw_body: true,
+        response_identity_mapping: true,
         execution_mode: "inference-only".into(),
         operations: vec!["responses".into()],
     }

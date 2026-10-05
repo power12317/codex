@@ -1,5 +1,47 @@
 # CPA bridge validation record
 
+## 2026-10-05 logical hierarchy and response identity mapping
+
+Baseline: `17e357cce98ad3fe257a508ae55713c453f0e1b9`; official upstream remains
+`afb436df8b70bb5bc57b86d9a3e829968988cd21`. These results use local HTTP mocks and
+fake credentials. They do not establish real model-service acceptance or replay
+of production CPA traffic.
+
+- CPA unit and real-process integration tests: **37/37 passed** using
+  `just test -p codex-app-server --lib --test all cpa_`.
+- All app-server-protocol library tests and selected core inference/client tests:
+  **360/360 passed** using
+  `just test -p codex-app-server-protocol -p codex-core --lib -E 'package(codex-app-server-protocol) | test(client::inference_) | test(client::tests)'`.
+- The experimental app-server schema was regenerated; stable and experimental
+  schema fixture checks passed in the protocol run.
+- Strict library Clippy passed for core, app-server and app-server-protocol with
+  `-D warnings`; Rust formatting and `git diff --check` completed afterward.
+- Hierarchy fixtures cover root, child and grandchild identity/header mapping,
+  parent references, explicit subagent metadata, root cache affinity and separate
+  routing state even when threads share a source turn ID.
+- Two title requests get distinct synthesized turns and no previous routing
+  state. Root state survives title calls. **Eight RPC requests produce exactly
+  eight model POSTs**, without automatic title-generation requests. The worker
+  state directory has no conversation rollout JSONL files.
+- Response fixtures exercise source session/thread/cache restoration on each
+  request, including changed cache keys on a reused context; absent source fields
+  remove matching synthesized values. Structured HTTP errors are projected while
+  their diagnostic copies retain native identities. Model/tool content,
+  `response.id`, `call_id`, business metadata and opaque state are preserved.
+- SSE tests cover every split position in a CRLF/multiline/UTF-8 fixture, lone CR,
+  exact bytes for unchanged events, EOF fragments, immediate heartbeat forwarding,
+  JSON bodies and the framing buffer limit.
+
+The capability extension keeps protocol v3, `rawBody: true` and the existing
+base64 body channel, and advertises `responseIdentityMapping: true`. Read-only
+inspection of CPA's current Go adapter confirmed ordinary additive JSON decoding
+and its existing v3/inference-only/rawBody checks; no CPA or CPAMP files changed.
+The outer CPA session scope remains an isolation boundary. Only source values
+actually received by Codex can be restored. Context state is worker-local and is
+not restored after restart; requests still carry their own conversation history.
+Linux builds and image smoke checks run in the dedicated image workflow after
+push. These local results do not claim that a new image is already published.
+
 ## 2026-10-05 request normalization
 
 Baseline: `9e40d2bca`, official source `afb436df8b70bb5bc57b86d9a3e829968988cd21`.

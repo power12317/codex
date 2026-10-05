@@ -59,7 +59,7 @@ async fn cpa_source_turn_continuity_isolation_and_default_stderr() -> Result<()>
     )?;
     let runtime = launch(&upstream, &home).await?;
     let mut ws = connect(&home).await?;
-    let source = json!({"session_id":"source-session", "thread_id":"source-thread", "turn_id":"turn-a", "root_turn_id":"root-a"});
+    let source = json!({"session_id":"source-session", "thread_id":"source-session", "turn_id":"turn-a", "root_turn_id":"root-a"});
     let mut request = start(
         json!({"model":"mock-model", "input":[], "test_state":"first",
         "prompt_cache_key":"caller-cache", "client_metadata":{"x-codex-turn-metadata": source.to_string()}}),
@@ -109,7 +109,11 @@ async fn cpa_source_turn_continuity_isolation_and_default_stderr() -> Result<()>
         json!(["first"])
     );
 
-    for (field, value) in [("turn_id", "turn-b"), ("thread_id", "other-thread")] {
+    for (field, value) in [
+        ("turn_id", "turn-b"),
+        ("thread_id", "other-thread"),
+        ("session_id", "other-session"),
+    ] {
         let mut isolated = request.clone();
         isolated["params"]["request"][field] = json!(value);
         assert!(

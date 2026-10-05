@@ -26,6 +26,7 @@ const WORKER_OWNED_METADATA_KEYS: &[&str] = &[
     "agent_name",
     "request_kind",
     "thread_source",
+    "subagent_kind",
     "turn_trigger",
     "sandbox",
     "sandbox_mode",

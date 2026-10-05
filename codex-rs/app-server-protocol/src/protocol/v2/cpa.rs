@@ -22,7 +22,11 @@ pub struct CpaCapabilitiesReadResponse {
     pub upstream_logs: bool,
     pub upstream_body_logs: bool,
     pub execution_mode: String,
+    /// Responses byte-stream transport (`bodyBase64`), not parsed IPC events.
     pub raw_body: bool,
+    /// Known response identity fields are restored to caller values. Other payloads are opaque.
+    #[serde(default)]
+    pub response_identity_mapping: bool,
     pub operations: Vec<String>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

@@ -4,8 +4,10 @@ use pretty_assertions::assert_eq;
 fn key(turn: Option<&str>) -> Key {
     Key {
         scope: "rpc".into(),
-        conversation: Some("thread-a".into()),
+        session: Some("session".into()),
+        thread: Some("thread-a".into()),
         turn: turn.map(str::to_owned),
+        provenance: Provenance::default(),
     }
 }
 

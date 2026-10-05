@@ -14,13 +14,80 @@ pub struct InferenceIdentity {
     pub prompt_cache_key: Option<String>,
     pub parent_turn_id: Option<String>,
     pub root_turn_id: Option<String>,
+    pub parent_thread_id: Option<String>,
+    pub thread_source: Option<String>,
+    pub subagent_kind: Option<String>,
+    pub subagent_header: Option<String>,
+    pub agent_name: Option<String>,
+    pub window_id: Option<String>,
+    pub request_kind: Option<String>,
 }
 
 impl InferenceIdentity {
-    /// Prefer a source thread, then a source session, within the CPA RPC scope.
-    /// Cache keys are routing hints and never define a conversation's identity.
-    pub fn conversation_key(&self) -> Option<&str> {
+    /// Root identity within the credential and CPA scope; children share this root.
+    pub fn session_key(&self) -> Option<&str> {
+        self.session_id.as_deref().or(self.thread_id.as_deref())
+    }
+
+    pub fn thread_key(&self) -> Option<&str> {
         self.thread_id.as_deref().or(self.session_id.as_deref())
+    }
+
+    /// Explicit native purpose metadata, never inferred from prompt text.
+    pub fn is_title(&self) -> bool {
+        self.thread_source.as_deref() == Some("thread_title")
+            || matches!(
+                self.request_kind.as_deref(),
+                Some("thread_title" | "title_generation")
+            )
+    }
+
+    pub fn map(&self, scope: &str) -> anyhow::Result<InferenceMapping> {
+        for value in [
+            &self.session_id,
+            &self.thread_id,
+            &self.parent_thread_id,
+            &self.turn_id,
+            &self.parent_turn_id,
+            &self.root_turn_id,
+            &self.prompt_cache_key,
+            &self.window_id,
+            &self.thread_source,
+            &self.subagent_kind,
+            &self.subagent_header,
+            &self.agent_name,
+            &self.request_kind,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            anyhow::ensure!(
+                value.len() <= 4096 && !value.chars().any(char::is_control),
+                "Invalid inference identity: maximum 4096 bytes, no control characters"
+            );
+        }
+        let namespace = Uuid::new_v5(&Uuid::NAMESPACE_OID, scope.as_bytes());
+        let session = Uuid::new_v5(&namespace, &serde_json::to_vec(&self.session_key())?);
+        let map_thread = |thread: Option<&str>| -> anyhow::Result<String> {
+            if thread.is_none() || thread == self.session_key() {
+                Ok(session.to_string())
+            } else {
+                Ok(Uuid::new_v5(&session, &serde_json::to_vec(&thread)?).to_string())
+            }
+        };
+        Ok(InferenceMapping {
+            session_id: session.to_string(),
+            thread_id: map_thread(self.thread_key())?,
+            parent_thread_id: self
+                .parent_thread_id
+                .as_deref()
+                .map(|id| map_thread(Some(id)))
+                .transpose()?,
+            window_id: namespace.to_string(),
+            turn_id: self.turn_id.clone(),
+            parent_turn_id: self.parent_turn_id.clone(),
+            root_turn_id: self.root_turn_id.clone(),
+        })
     }
 
     pub fn from_request(request: &Map<String, Value>) -> Self {
@@ -49,6 +116,13 @@ impl InferenceIdentity {
             prompt_cache_key: read("prompt_cache_key"),
             parent_turn_id: read("parent_turn_id"),
             root_turn_id: read("root_turn_id"),
+            parent_thread_id: read("parent_thread_id").or_else(|| read("x-codex-parent-thread-id")),
+            thread_source: read("thread_source"),
+            subagent_kind: read("subagent_kind"),
+            subagent_header: read("x-openai-subagent"),
+            agent_name: read("agent_name"),
+            window_id: read("window_id").or_else(|| read("x-codex-window-id")),
+            request_kind: read("request_kind"),
         }
     }
 }
@@ -56,6 +130,18 @@ impl InferenceIdentity {
 #[cfg(test)]
 #[path = "inference_session_tests.rs"]
 mod tests;
+
+/// Only identities are retained; no conversation contents or persisted thread are created.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct InferenceMapping {
+    pub session_id: String,
+    pub thread_id: String,
+    pub parent_thread_id: Option<String>,
+    pub window_id: String,
+    pub turn_id: Option<String>,
+    pub parent_turn_id: Option<String>,
+    pub root_turn_id: Option<String>,
+}
 
 /// A caller turn's native client and first upstream routing state. No tool runtime.
 pub struct InferenceSession {
@@ -71,19 +157,38 @@ impl InferenceSession {
         scope: &str,
         source: &InferenceIdentity,
     ) -> anyhow::Result<Self> {
-        let namespace = Uuid::new_v5(&Uuid::NAMESPACE_OID, scope.as_bytes());
+        let mapped = source.map(scope)?;
         anyhow::ensure!(
             source.turn_id.is_some(),
             "inference turn_id must be resolved"
         );
-        let session_id = Uuid::new_v5(&namespace, &serde_json::to_vec(&source.conversation_key())?);
-        let thread_id = session_id;
+        let subagent = source
+            .subagent_header
+            .clone()
+            .or_else(|| {
+                source.subagent_kind.as_deref().map(|kind| {
+                    if kind == "thread_spawn" {
+                        "collab_spawn"
+                    } else {
+                        kind
+                    }
+                    .to_owned()
+                })
+            })
+            .or_else(|| {
+                (source.thread_source.as_deref() == Some("subagent")).then(|| "subagent".to_owned())
+            });
+        let session_source = subagent.as_ref().map_or(SessionSource::Cli, |kind| {
+            SessionSource::SubAgent(codex_protocol::protocol::SubAgentSource::Other(
+                kind.clone(),
+            ))
+        });
         let client = ModelClient::new(
             Some(auth),
             AgentIdentityAuthPolicy::JwtOnly,
-            ThreadId::from_string(&thread_id.to_string())?,
+            ThreadId::from_string(&mapped.thread_id)?,
             config.model_provider.clone(),
-            SessionSource::Cli,
+            session_source,
             "codex_cli_rs".into(),
             config.model_verbosity,
             /*content_item_kinds_enabled*/ false,
@@ -99,18 +204,50 @@ impl InferenceSession {
         );
         let mut metadata = CodexResponsesMetadata::new(
             installation_id.into(),
-            session_id.to_string(),
-            thread_id.to_string(),
-            namespace.to_string(),
+            mapped.session_id,
+            mapped.thread_id,
+            mapped.window_id,
         );
         metadata.turn_id.clone_from(&source.turn_id);
         metadata.parent_turn_id.clone_from(&source.parent_turn_id);
         metadata.root_turn_id.clone_from(&source.root_turn_id);
+        metadata.parent_thread_id = mapped
+            .parent_thread_id
+            .as_deref()
+            .map(ThreadId::from_string)
+            .transpose()?;
+        metadata.thread_source = if source.is_title() {
+            Some(codex_protocol::protocol::ThreadSource::Feature(
+                "thread_title".into(),
+            ))
+        } else {
+            source
+                .thread_source
+                .as_deref()
+                .map(str::parse)
+                .transpose()
+                .map_err(anyhow::Error::msg)?
+        };
+        metadata.subagent_kind.clone_from(&source.subagent_kind);
+        metadata.subagent_header = subagent;
+        metadata.agent_name.clone_from(&source.agent_name);
         metadata.request_kind = Some(CodexResponsesRequestKind::Turn);
         Ok(Self {
             session: client.new_session(),
             metadata,
         })
+    }
+
+    pub fn mapping(&self) -> InferenceMapping {
+        InferenceMapping {
+            session_id: self.metadata.session_id.clone(),
+            thread_id: self.metadata.thread_id.clone(),
+            parent_thread_id: self.metadata.parent_thread_id.map(|id| id.to_string()),
+            window_id: self.metadata.window_id.clone(),
+            turn_id: self.metadata.turn_id.clone(),
+            parent_turn_id: self.metadata.parent_turn_id.clone(),
+            root_turn_id: self.metadata.root_turn_id.clone(),
+        }
     }
 
     pub fn turn_state(&self) -> Option<&str> {

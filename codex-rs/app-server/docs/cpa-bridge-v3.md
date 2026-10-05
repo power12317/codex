@@ -36,7 +36,7 @@ Authorization header is required. `initialize` / `initialized` remain.
 return master capabilities:
 
 ```json
-{"protocolVersion":3,"runtimeVersion":"...","upstreamRevision":"...","executionMode":"inference-only","operations":["responses"],"rawBody":true,"manualOAuth":true,"upstreamLogs":true,"upstreamBodyLogs":true}
+{"protocolVersion":3,"runtimeVersion":"...","upstreamRevision":"...","executionMode":"inference-only","operations":["responses"],"rawBody":true,"responseIdentityMapping":true,"manualOAuth":true,"upstreamLogs":true,"upstreamBodyLogs":true}
 ```
 
 Reload scans one credential or the directory and waits for the corresponding
@@ -57,7 +57,8 @@ Ordered notifications:
   notifications with `requestId`, actual URL/method/headers/body/status/message.
   Header values are string arrays. Actual token SHA256 and gateway node remain
   optional logging metadata.
-- **`cpa/inference/body {requestId, bodyBase64}`**: original HTTP response bytes.
+- **`cpa/inference/body {requestId, bodyBase64}`**: HTTP response bytes after the
+  selective identity projection described below.
   This is the only business-response body channel. Do not emit an additional
   `upstream kind:"body"` or parsed `cpa/inference/event` copy.
 - `cpa/inference/completed {requestId}`: normal HTTP body EOF.
@@ -65,38 +66,98 @@ Ordered notifications:
   transfer; do not follow it with a successful completion.
 
 Send the start result before pulling/transferring body bytes. Request/response
-log entries may precede acceptance. CPA logs the raw bytes and applies its normal
-SSE/response processing. The master/worker do not parse function-call responses.
+log entries may precede acceptance. CPA receives the business-response byte stream
+and applies its normal SSE/response processing. The bridge examines only supported
+identity paths; function-call contents remain opaque.
 Concurrent requests for one credential must remain supported.
 
 Source `session_id`, `thread_id`, `turn_id`, `prompt_cache_key`, `parent_turn_id`
-and `root_turn_id` are read from top-level request fields, then flat
+and `root_turn_id`, plus `parent_thread_id`, `thread_source`, `subagent_kind`,
+`x-openai-subagent`, `agent_name`, `window_id` and `request_kind`, are read from
+top-level request fields, then flat
 `client_metadata`, then its JSON-encoded `x-codex-turn-metadata` (in that order).
-The credential and CPA `sessionId` form the namespace for a deterministic native
-root-thread UUID. Within that scope, the source thread identifies the conversation;
-if missing, the source session is used; otherwise the RPC scope identifies it.
-The source cache key is diagnostic input, not an independent conversation identity.
-Native `client_metadata.session_id`, `thread_id`, body `prompt_cache_key` and the
-HTTP `session-id`/`thread-id` headers all use that root-thread UUID. No subagent
-identity or independent cache-key override is synthesized by the CPA bridge.
-Source turn and root/parent turn IDs survive. Authentication and installation
-identities remain worker-owned.
+`x-codex-parent-thread-id` and `x-codex-window-id` are accepted aliases. Identity
+values are limited to 4096 bytes each and cannot contain control characters.
+
+The credential and outer CPA `sessionId` form an isolation namespace. Within it,
+the source session identifies the root (falling back to the source thread, then
+the RPC scope if both are absent). A deterministic UUID identifies that native
+session. A missing thread or a thread equal to the source session uses the root
+UUID; a distinct thread maps to its own UUID within that root. Parent references
+use the same mapping, including grandchildren. `session-id` carries the root and
+`thread-id` carries the current thread. The body cache key uses the root UUID;
+the source cache key does not independently identify a conversation. Explicit
+subagent metadata is preserved/rebuilt, including the native `collab_spawn`
+compatibility header for `subagent_kind: "thread_spawn"`. Unequal session/thread
+IDs alone do not classify a request as a subagent. Source turn and root/parent
+turn IDs survive. Authentication and installation identities remain worker-owned.
+
+This is logical mapping only: no ThreadManager thread, rollout, conversation
+history or local tool/agent loop is created. The process model stays one worker
+per enabled credential, with multiple isolated session/thread contexts inside it;
+there is no operating-system process per source session. Different credentials
+or outer CPA scopes do not automatically share a session or routing state.
 
 When a source turn ID is missing, the worker generates a UUIDv7 on the first
 request and reuses it and its native routing context for exactly one hour from
-creation, within the same conversation and RPC scope. Requests do not extend that
-window. After expiry, new requests receive a new turn ID and empty routing state;
+creation, within the same root, thread, provenance and RPC scope. Requests do not
+extend that window. After expiry, new requests receive a new turn ID and empty routing state;
 in-flight requests retain their old context. Explicit source turn IDs are separate
 from synthetic turns and their contexts expire after one hour without access.
 This one-hour fallback groups requests for compatibility; it does not infer real
-user-turn boundaries. Contexts are memory-only and reset on worker restart.
+user-turn boundaries. Parent/source/subagent provenance and parent/root turn IDs
+are part of the context key, preventing stale ancestry from being reused. Contexts
+retain identities and native routing state, not message history, and reset on
+worker restart. Requests must supply their own history.
+
+Title inference is recognized only by `thread_source: "thread_title"` or
+`request_kind: "thread_title"` / `"title_generation"`. These calls associate with
+the same logical IDs but get disposable contexts outside the turn cache, with no
+previous turn state. Missing turn IDs are fresh for each title call. They neither
+create another local conversation nor trigger another title-generation request.
+Prompt wording alone is not a title marker.
 
 The cache holds at most 1024 contexts per worker. Expired entries are removed on
 access. At capacity, new contexts receive HTTP 429; existing unexpired contexts
 are never evicted to silently discard their routing state. Same-key creation is
 atomic under the worker's short-lived mutex. The first valid upstream
 `x-codex-turn-state` from HTTP headers or native `response.metadata` is retained.
-Original body bytes remain unchanged and no function call is executed.
+No function call is executed.
+
+## Response identity projection
+
+`rawBody: true` identifies the existing `bodyBase64` byte-stream transport, not a
+promise that every upstream byte is unchanged. The additive
+`responseIdentityMapping: true` capability announces selective inverse mapping;
+protocol version 3 and `inference-only` mode remain unchanged.
+
+Each request has its own source/native mapping. Known session/thread/parent-thread,
+cache, window and turn/root-turn/parent-turn fields are restored only when their
+value exactly matches that request's mapped native value. Supported locations are
+the root envelope, nested `response` / `error` envelopes, their `client_metadata`
+and `headers`, and encoded `x-codex-turn-metadata`. Snake/camel spellings and the
+native identity header aliases are recognized. If the corresponding source field
+was absent, a matching generated field is removed instead of exposing a synthetic
+source identity. Server-owned values that do not match the mapping remain intact.
+
+Successful response headers allowlist `session-id`, `thread-id`,
+`x-codex-parent-thread-id`, `x-codex-window-id` and `x-codex-turn-metadata` in
+addition to the existing public diagnostic headers. Structured HTTP error bodies
+and headers receive the same projection; stale body validators are removed when
+an error body changes. The separate `cpa/inference/upstream` diagnostic channel
+retains actual native request/response identities for troubleshooting.
+
+This is not global string replacement: `response.id`, output/item IDs, `call_id`,
+tool arguments/results, model text, generic business `metadata`, `x-request-id`
+and opaque `turn_state` are untouched. Only what CPA actually passed to Codex can
+be restored; values already replaced inside CPA cannot be recovered here.
+
+SSE frames are buffered until their data can be examined. Unchanged events retain
+their exact bytes, while modified JSON data is reserialized with non-data lines
+preserved. Leading heartbeat/comment/event/id lines are forwarded immediately.
+JSON HTTP responses are projected at EOF. Each pending SSE event or JSON response
+input buffer is limited to 16 MiB; exceeding it fails the stream. Output IPC chunks
+are at most 64 KiB. These transient buffers are not persisted conversation storage.
 
 ## OAuth
 
@@ -127,8 +188,8 @@ Both ordinary Responses and Responses Lite serialize native `ToolSpec` values.
 Lite uses the native `additional_tools` prefix and namespace convention; no raw
 caller tools array overwrites the builder's output. Tool choice objects retain
 their namespace semantics. Historical namespaces, call IDs, arguments and results
-are preserved. There is no local tool router or agent loop, and returned SSE bytes
-are not rewritten because names and call IDs are not translated.
+are preserved. There is no local tool router or agent loop. Response identity
+projection does not rename tools or translate call IDs.
 
 Current date and timezone are read from the worker's actual system clock and
 runtime timezone configuration, with no country or language based default. An
@@ -151,7 +212,7 @@ Field handling:
 | tool_choice/text/include and unknown top-level extensions | Retain as documented request options, subject to tool-choice validation; extensions are not a guarantee of upstream support. |
 | non-reserved flat client_metadata | Retain unless managed above. |
 | previous_response_id/conversation/generate/store=true/background=true | Reject; stream=true is required. |
-| response HTTP body | Forward unchanged as ordered base64 chunks, observing routing metadata only. |
+| response HTTP body | Restore matching known envelope identity fields, then forward as ordered base64 chunks; preserve opaque content. |
 
 The `sourceFormat` label does not convert whole Chat/Claude conversations into
 Responses. CPA still supplies the Responses request envelope and history.

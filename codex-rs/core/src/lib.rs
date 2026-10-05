@@ -223,6 +223,7 @@ pub use attestation::AttestationContext;
 pub use attestation::AttestationProvider;
 pub use attestation::GenerateAttestationFuture;
 pub use client::InferenceIdentity;
+pub use client::InferenceMapping;
 pub use client::InferenceSession;
 pub use client::ModelClient;
 pub use client::ModelClientSession;

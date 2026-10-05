@@ -1,6 +1,8 @@
 //! CPA TCP contract tests use a shared fake credential file and a mock upstream.
 #[path = "cpa_bridge/continuity_tests.rs"]
 mod continuity_tests;
+#[path = "cpa_bridge/hierarchy_tests.rs"]
+mod hierarchy_tests;
 #[path = "cpa_bridge/home_tests.rs"]
 mod home_tests;
 #[path = "cpa_bridge/parser_tests.rs"]

@@ -43,7 +43,7 @@ async fn native_tool_catalog_and_namespace_history_reach_wire(lite: bool) -> Res
     ]);
     let choice = json!({"type":"function", "namespace":"collaboration", "name":"send_message"});
     let request = start(
-        json!({"model":"mock-model", "input":history, "tools":tools, "tool_choice":choice, "session_id":"session-a", "thread_id":"thread-b", "prompt_cache_key":"cache-c"}),
+        json!({"model":"mock-model", "input":history, "tools":tools, "tool_choice":choice, "session_id":"session-a", "thread_id":"session-a", "prompt_cache_key":"cache-c"}),
     );
     for _ in 0..2 {
         let (logged, returned) = exchange(&mut ws, request.clone()).await?;

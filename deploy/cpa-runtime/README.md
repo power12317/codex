@@ -75,6 +75,15 @@ reenabling. An already submitted upstream operation cannot be recalled.
 CPA owns global/per-account preferences and request selection; the master only
 applies effective file flags. The runtime does not execute model tool calls.
 
+Each credential worker holds logical session/thread mappings and bounded turn
+routing contexts in memory. It does not create local conversation threads or
+persist their message history. Root, child and parent identities are mapped
+within the credential and CPA scope, and known response identity fields are
+restored to the values CPA supplied. Explicit title requests use disposable
+contexts and do not trigger additional title generation. Requests must include
+their own history; worker restart clears turn state. Full native request/response
+diagnostics still use the existing CPA log channel.
+
 `codex`, `codex-app-server`, `exec-server`, `codex-code-mode-host` and the official
 `bwrap` helper remain in the image. Enabled children retain applicable native
 background activities. Refresh runs on credential access/401 recovery; no
