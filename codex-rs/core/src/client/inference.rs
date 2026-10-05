@@ -2,9 +2,6 @@
 use super::*;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::BaseInstructions;
-use codex_tools::FreeformTool;
-use codex_tools::ResponsesApiTool;
-use codex_tools::ToolSpec;
 use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
@@ -56,16 +53,20 @@ pub async fn prepare_inference_request(
     if input.is_string() {
         input = json!([{"type":"message","role":"user","content":[{"type":"input_text","text":input}]}]);
     }
-    for item in input
+    let input_items = input
         .as_array_mut()
-        .ok_or_else(|| anyhow::anyhow!("input must be text or an array"))?
-    {
+        .ok_or_else(|| anyhow::anyhow!("input must be text or an array"))?;
+    for item in &mut *input_items {
         if item.get("role").is_some() && item.get("type").is_none() {
             item["type"] = json!("message");
         }
         if item["type"] == "message" && item["content"].is_string() {
             item["content"] = json!([{"type":"input_text","text":item["content"]}]);
         }
+    }
+    let time = super::inference_context::TimeContext::now();
+    if !time.apply(input_items) {
+        input_items.push(time.message());
     }
     let mut input: Vec<ResponseItem> = serde_json::from_value(input)?;
     for item in &mut input {
@@ -82,52 +83,10 @@ pub async fn prepare_inference_request(
         !input.iter().any(|item| matches!(item, ResponseItem::Other)),
         "unsupported input item"
     );
-    let mut tools = Vec::new();
-    if let Some(caller_tools) = request.get("tools") {
-        for tool in caller_tools
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("tools must be an array"))?
-        {
-            tools.push(match tool["type"].as_str() {
-                Some("function") => {
-                    let parameters = tool
-                        .get("parameters")
-                        .cloned()
-                        .unwrap_or_else(|| json!({"type":"object"}));
-                    let schema = serde_json::from_value(parameters.clone())?;
-                    anyhow::ensure!(
-                        serde_json::to_value(&schema)? == parameters,
-                        "unsupported function parameter schema"
-                    );
-                    ToolSpec::Function(ResponsesApiTool {
-                        name: tool["name"]
-                            .as_str()
-                            .ok_or_else(|| anyhow::anyhow!("function name required"))?
-                            .into(),
-                        description: tool["description"].as_str().unwrap_or_default().into(),
-                        strict: tool
-                            .get("strict")
-                            .map(|value| serde_json::from_value(value.clone()))
-                            .transpose()?
-                            .unwrap_or(false),
-                        defer_loading: tool
-                            .get("defer_loading")
-                            .map(|value| serde_json::from_value(value.clone()))
-                            .transpose()?,
-                        parameters: schema,
-                        output_schema: None,
-                    })
-                }
-                Some("custom") => {
-                    ToolSpec::Freeform(serde_json::from_value::<FreeformTool>(tool.clone())?)
-                }
-                _ => anyhow::bail!("only caller-executed function/custom tools are supported"),
-            });
-        }
-    }
+    let tools = super::inference_tools::InferenceTools::parse(request)?;
     let prompt = Prompt {
         input,
-        tools: tools.into(),
+        tools: tools.native.into(),
         parallel_tool_calls: request
             .get("parallel_tool_calls")
             .map(|v| serde_json::from_value(v.clone()))
@@ -188,6 +147,7 @@ pub async fn prepare_inference_request(
                 | "input"
                 | "instructions"
                 | "tools"
+                | "tool_choice"
                 | "reasoning"
                 | "parallel_tool_calls"
                 | "store"
@@ -214,11 +174,18 @@ pub async fn prepare_inference_request(
                 | "parent_thread_id"
                 | "parent_turn_id"
                 | "root_turn_id"
+                | "prompt_cache_key"
+                | "timezone"
+                | "current_date"
         ) {
             body[key] = value.clone();
         }
     }
+    if let Some(choice) = tools.choice {
+        body["tool_choice"] = choice;
+    }
     merge_caller_client_metadata(&mut body, request);
+    time.metadata(&mut body, request);
     if let Some(reasoning) = reasoning.and_then(Value::as_object) {
         for (key, value) in reasoning {
             if !matches!(key.as_str(), "effort" | "summary") {
@@ -226,16 +193,10 @@ pub async fn prepare_inference_request(
             }
         }
     }
-    let mut options = session
+    let options = session
         .session
         .build_responses_options(metadata, Compression::None, model_info.use_responses_lite)
         .await;
-    // Native ChatGPT transport uses session_id for cache affinity. Keep the business
-    // session in metadata while matching the effective caller cache key on the wire.
-    if let Some(cache_key) = InferenceIdentity::from_request(request).prompt_cache_key {
-        body["prompt_cache_key"] = json!(cache_key);
-        options.session_id = Some(cache_key);
-    }
     Ok((body, options))
 }
 
@@ -251,7 +212,10 @@ fn merge_caller_client_metadata(body: &mut Value, request: &Map<String, Value>) 
     };
 
     for (key, value) in caller_metadata {
-        if WORKER_OWNED_METADATA_KEYS.contains(&key.as_str()) || native_metadata.contains_key(key) {
+        if key == "prompt_cache_key"
+            || WORKER_OWNED_METADATA_KEYS.contains(&key.as_str())
+            || native_metadata.contains_key(key)
+        {
             continue;
         }
         native_metadata.insert(key.clone(), value.clone());

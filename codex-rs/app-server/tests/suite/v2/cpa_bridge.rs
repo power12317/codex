@@ -3,6 +3,8 @@
 mod continuity_tests;
 #[path = "cpa_bridge/home_tests.rs"]
 mod home_tests;
+#[path = "cpa_bridge/parser_tests.rs"]
+mod parser_tests;
 
 use anyhow::Result;
 use app_test_support::ChatGptIdTokenClaims;
@@ -110,6 +112,14 @@ async fn server(upstream: &MockServer, home: &TempDir) -> Result<TestAppServer> 
 }
 
 async fn launch(upstream: &MockServer, home: &TempDir) -> Result<TestAppServer> {
+    launch_with_timezone(upstream, home, None).await
+}
+
+async fn launch_with_timezone(
+    upstream: &MockServer,
+    home: &TempDir,
+    timezone: Option<&str>,
+) -> Result<TestAppServer> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port().to_string();
     drop(listener);
@@ -118,6 +128,7 @@ async fn launch(upstream: &MockServer, home: &TempDir) -> Result<TestAppServer> 
     TestAppServer::builder()
         .with_codex_home(home.path())
         .with_env_overrides(&[
+            ("TZ", timezone),
             (
                 "CODEX_CPA_AUTH_DIR",
                 Some(&home.path().display().to_string()),

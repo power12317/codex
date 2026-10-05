@@ -25,7 +25,9 @@ pub struct FreeformTool {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FreeformToolFormat {
     pub r#type: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub syntax: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub definition: String,
 }
 

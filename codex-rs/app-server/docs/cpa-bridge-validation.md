@@ -1,5 +1,44 @@
 # CPA bridge validation record
 
+## 2026-10-05 request normalization
+
+Baseline: `9e40d2bca`, official source `afb436df8b70bb5bc57b86d9a3e829968988cd21`.
+Validation uses fake credentials and local HTTP mocks, not a replay of business
+requests or billable inference against the real service.
+
+- CPA/master unit and real-process integration tests: **27/27 passed**.
+- Native client, new identity/time/tool parser units, and all shared tool units:
+  **147/147 passed**, including tool-continuation history preservation.
+- Strict library Clippy passed for core, app-server and tools with `-D warnings`;
+  Rust formatting and whitespace validation completed afterward.
+- Both standard Responses and Responses Lite compare the prepared request with
+  the actual HTTP body received by the mock. The sanitized incident fixture keeps
+  six top-level tools: custom exec, two functions, two namespaces (eight nested
+  functions), and web search. Namespace names, descriptions, schema `encrypted`,
+  strict/defer-loading flags, custom grammar, `external_web_access: false`, and
+  `search_content_types: [text, image]` survive native serialization. Lite uses
+  native `additional_tools` placement. No caller tools array overwrites the
+  builder's output.
+- Namespace/call-ID history associations and exact returned SSE bytes are checked.
+  Unsupported tool errors identify the failing array position.
+- Session/thread/cache identity equality is checked in body and headers. Tests
+  cover explicit turns, synthesized turns, same-session concurrency, credential
+  and conversation isolation, same-value session/thread field fallback, first-state
+  reuse, expiry with an in-flight holder,
+  and capacity behavior without eviction of fresh state.
+- UTC, Singapore and Tokyo are subprocess test configurations, not application
+  defaults. All three replace only the current date/timezone context, preserving
+  prior history, paths and OS declarations.
+- The already-published ARM64 baseline image was run directly and returned
+  `UTC +0000`, `/etc/localtime -> /usr/share/zoneinfo/Etc/UTC`, and `Etc/UTC` in
+  `/etc/timezone`. Both published architecture configs have no `TZ` environment
+  default. No regional timezone was added to the Dockerfile.
+
+These checks establish local transport and serialization behavior. Acceptance of
+all tool combinations by the real upstream service has not been exercised.
+Synthetic turn continuity is worker-local and resets on restart; identity mapping
+changes mean an upgrade uses different upstream conversation/cache IDs.
+
 ## v3 validation
 
 Contract: V3-SEP-20260927. The current tests start a real directory master and

@@ -26,6 +26,8 @@
 //! fails, normal stream retry/fallback logic handles recovery on the same turn.
 
 mod inference;
+mod inference_context;
+mod inference_tools;
 pub use inference::prepare_inference_request;
 mod inference_session;
 pub use inference_session::InferenceIdentity;

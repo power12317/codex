@@ -151,7 +151,16 @@ impl CpaBridge {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .get(self, &params)
-                .map_err(|error| failure(/*status*/ 400, &error.to_string()))?;
+                .map_err(|error| {
+                    failure(
+                        if error.is::<contexts::CapacityExceeded>() {
+                            429
+                        } else {
+                            400
+                        },
+                        &error.to_string(),
+                    )
+                })?;
             let token = CancellationToken::new();
             {
                 let mut active = self
@@ -338,16 +347,29 @@ impl CpaBridge {
         let (body, options) =
             codex_core::prepare_inference_request(session, &model_info, &params.request)
                 .await
-                .map_err(|error| failure(/*status*/ 400, &error.to_string()))?;
+                .map_err(|error| failure(/*status*/ 400, &format!("{error:#}")))?;
+        let source = codex_core::InferenceIdentity::from_request(&params.request);
+        let source_ids: Vec<_> = [
+            &source.session_id,
+            &source.thread_id,
+            &source.prompt_cache_key,
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let source_ids_disagree = source_ids.windows(2).any(|pair| pair[0] != pair[1]);
         upstream::record(
             &params.credential_id,
             &params.request_id,
             "cpa.request.mapping",
             json!({
-                "source": codex_core::InferenceIdentity::from_request(&params.request),
+                "source": source,
                 "worker": {"session_id": body["client_metadata"]["session_id"],
                     "thread_id": body["client_metadata"]["thread_id"], "turn_id": body["client_metadata"]["turn_id"]},
                 "promptCacheKey": body["prompt_cache_key"],
+                "identityPolicy": "root-thread-session-cache-unified",
+                "sourceIdsDisagree": source_ids_disagree,
+                "syntheticTurn": source.turn_id.is_none(),
                 "transportSessionId": options.session_id, "transportThreadId": options.thread_id,
                 "turnStateSent": options.extra_headers.get("x-codex-turn-state").and_then(|value| value.to_str().ok()),
             }),
@@ -537,20 +559,6 @@ fn validate(params: &CpaInferenceStartParams) -> BridgeResult<()> {
     }
     if r.get("stream") != Some(&Value::Bool(true)) {
         return Err(failure(/*status*/ 400, "stream=true is required"));
-    }
-    if let Some(tools) = r.get("tools") {
-        let tools = tools
-            .as_array()
-            .ok_or_else(|| failure(/*status*/ 400, "tools must be an array"))?;
-        if tools
-            .iter()
-            .any(|tool| !matches!(tool["type"].as_str(), Some("function" | "custom")))
-        {
-            return Err(failure(
-                /*status*/ 400,
-                "Only caller-executed function/custom tools are supported",
-            ));
-        }
     }
     // Caller transport/auth/device metadata is sanitized during native request preparation.
     // Business Responses fields remain available to the worker-owned request builder.

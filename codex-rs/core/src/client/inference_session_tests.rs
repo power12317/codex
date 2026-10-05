@@ -3,6 +3,24 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 #[test]
+fn conversation_identity_prefers_thread_and_ignores_cache_affinity() {
+    for (request, expected) in [
+        (
+            json!({"thread_id":"thread", "session_id":"session", "prompt_cache_key":"cache"}),
+            Some("thread"),
+        ),
+        (
+            json!({"session_id":"session", "prompt_cache_key":"cache"}),
+            Some("session"),
+        ),
+        (json!({"prompt_cache_key":"cache"}), None),
+    ] {
+        let identity = InferenceIdentity::from_request(request.as_object().unwrap());
+        assert_eq!(identity.conversation_key(), expected);
+    }
+}
+
+#[test]
 fn source_identity_merges_top_level_flat_and_nested_metadata() {
     let request = json!({"session_id":"top-session", "turn_id":null, "prompt_cache_key":"",
         "client_metadata":{"session_id":"flat-session", "thread_id":"flat-thread",

@@ -6,7 +6,8 @@ chat alternatives concerning body notifications.
 Current upstream: official `openai/codex` default branch `main`, commit
 `afb436df8b70bb5bc57b86d9a3e829968988cd21`, fetched on 2026-10-04 at
 20:42:10 +08:00. This is a default-branch source merge, not a release-tag rebase.
-The CPA v3 contract and the dedicated `codex/cpa-managed-auth` image remain unchanged.
+The CPA v3 envelope and dedicated image tag remain unchanged; normalization rules
+for this branch are specified below.
 
 ## Identity and state
 
@@ -71,22 +72,31 @@ Concurrent requests for one credential must remain supported.
 Source `session_id`, `thread_id`, `turn_id`, `prompt_cache_key`, `parent_turn_id`
 and `root_turn_id` are read from top-level request fields, then flat
 `client_metadata`, then its JSON-encoded `x-codex-turn-metadata` (in that order).
-The credential and CPA `sessionId` form a namespace for deterministic native
-session/thread UUIDs; different source sessions/threads retain distinct mappings.
-Source turn and root/parent turn IDs survive in native metadata. Installation,
-device and authentication identities remain worker-owned. The supplied cache key
-(including CPA's already scoped value) is used both in the request body and the
-native cache-affinity `session-id` transport header; it does not replace the
-business session identity in metadata.
+The credential and CPA `sessionId` form the namespace for a deterministic native
+root-thread UUID. Within that scope, the source thread identifies the conversation;
+if missing, the source session is used; otherwise the RPC scope identifies it.
+The source cache key is diagnostic input, not an independent conversation identity.
+Native `client_metadata.session_id`, `thread_id`, body `prompt_cache_key` and the
+HTTP `session-id`/`thread-id` headers all use that root-thread UUID. No subagent
+identity or independent cache-key override is synthesized by the CPA bridge.
+Source turn and root/parent turn IDs survive. Authentication and installation
+identities remain worker-owned.
 
-Each worker retains a native inference session by CPA scope + source session +
-source thread + source turn. Requests in that turn reuse the first valid upstream
-`x-codex-turn-state`, obtained from HTTP headers or native `response.metadata`.
-Other turns, credentials and source sessions/threads never share that state.
-No source turn ID means a fresh session per RPC, reused only for that RPC's auth
-recovery. Contexts live until worker exit; no arbitrary capacity eviction is used.
-Only routing metadata is observed; original body bytes remain unchanged and no
-function call is executed.
+When a source turn ID is missing, the worker generates a UUIDv7 on the first
+request and reuses it and its native routing context for exactly one hour from
+creation, within the same conversation and RPC scope. Requests do not extend that
+window. After expiry, new requests receive a new turn ID and empty routing state;
+in-flight requests retain their old context. Explicit source turn IDs are separate
+from synthetic turns and their contexts expire after one hour without access.
+This one-hour fallback groups requests for compatibility; it does not infer real
+user-turn boundaries. Contexts are memory-only and reset on worker restart.
+
+The cache holds at most 1024 contexts per worker. Expired entries are removed on
+access. At capacity, new contexts receive HTTP 429; existing unexpired contexts
+are never evicted to silently discard their routing state. Same-key creation is
+atomic under the worker's short-lived mutex. The first valid upstream
+`x-codex-turn-state` from HTTP headers or native `response.metadata` is retained.
+Original body bytes remain unchanged and no function call is executed.
 
 ## OAuth
 
@@ -101,15 +111,50 @@ There is no separate independently refreshed auth.json copy.
 
 ## Native request mapping
 
-The child uses the retained native model catalog and `ModelClient` prompt/request
-builder and request options. It normalizes text input into native message items,
-uses caller instructions and function/custom tool definitions, model-dependent
-Responses Lite layout, reasoning, output schema and native metadata/headers.
-Caller tool-choice objects and additional top-level Responses options are retained
-explicitly after native construction. Unsupported native input/tool schemas fail
-with HTTP 400 instead of silently dropping constraints. Caller transport identity
-headers, persistent session IDs, background generation and server-executed tools
-remain unavailable. No agent turn or tool router is created for inference.
+The child uses the retained native model catalog, `ModelClient` prompt/request
+builder, and request options. Tool parsing has one owner in the core CPA adapter;
+the IPC envelope validator does not maintain a second tool-type allowlist.
+Supported tools are native `function`, `custom`, `namespace` (function/custom
+children), and `web_search`. Search runs upstream, not in the worker. The parser
+preserves namespace/name/description, grammar, supported JSON Schema constraints
+including `encrypted`, `strict`, `defer_loading`, and explicit search booleans and
+content types. Chat-style nested function definitions and `input_schema` tool
+definitions are normalized without renaming tools. Unsupported fields/schema
+constraints fail with a path such as `tools[3].tools[1]`, rather than being silently
+removed. Function `output_schema` is not a supported wire field and is rejected.
+
+Both ordinary Responses and Responses Lite serialize native `ToolSpec` values.
+Lite uses the native `additional_tools` prefix and namespace convention; no raw
+caller tools array overwrites the builder's output. Tool choice objects retain
+their namespace semantics. Historical namespaces, call IDs, arguments and results
+are preserved. There is no local tool router or agent loop, and returned SSE bytes
+are not rewritten because names and call IDs are not translated.
+
+Current date and timezone are read from the worker's actual system clock and
+runtime timezone configuration, with no country or language based default. An
+unavailable IANA zone name is represented using the actual UTC offset. Only
+standalone current `environment_context` / `codex_apps_client_time_context` text
+blocks after the last assistant message or non-message history item are rewritten;
+earlier history, quoted
+examples, code fences, paths and OS declarations remain unchanged. A missing
+current block is supplied as a small standalone message. Flat caller metadata
+date/timezone fields are updated consistently; top-level date/timezone parameters
+are consumed instead of being sent as unknown Responses parameters.
+
+Field handling:
+
+| Fields | Policy |
+| --- | --- |
+| model/input/instructions/tools/reasoning/service_tier | Parse and build using native types; normalize text messages and supported tool envelopes. |
+| session/thread/cache/turn identities | Resolve once using the identity and lifecycle rules above. |
+| headers/authorization/cookies and reserved device metadata | Worker-owned; caller values cannot override the transport. |
+| tool_choice/text/include and unknown top-level extensions | Retain as documented request options, subject to tool-choice validation; extensions are not a guarantee of upstream support. |
+| non-reserved flat client_metadata | Retain unless managed above. |
+| previous_response_id/conversation/generate/store=true/background=true | Reject; stream=true is required. |
+| response HTTP body | Forward unchanged as ordered base64 chunks, observing routing metadata only. |
+
+The `sourceFormat` label does not convert whole Chat/Claude conversations into
+Responses. CPA still supplies the Responses request envelope and history.
 
 HTTP authentication recovery can refresh credentials and retry a rejected 401;
 accepted HTTP streams are never replayed. Body EOF is transport completion, not

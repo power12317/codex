@@ -1,0 +1,306 @@
+[
+  {
+    "type": "custom",
+    "name": "exec",
+    "description": "Fixture tool description.",
+    "format": {
+      "type": "grammar",
+      "syntax": "lark",
+      "definition": "\nstart: pragma_source | plain_source\npragma_source: PRAGMA_LINE NEWLINE SOURCE\nplain_source: SOURCE\n\nPRAGMA_LINE: /[ \\t]*\\/\\/ @exec:[^\\r\\n]*/\nNEWLINE: /\\r?\\n/\nSOURCE: /[\\s\\S]+/\n"
+    }
+  },
+  {
+    "type": "function",
+    "name": "wait",
+    "description": "Fixture tool description.",
+    "strict": false,
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "cell_id": {
+          "type": "string",
+          "description": "Fixture tool description."
+        },
+        "max_tokens": {
+          "type": "number",
+          "description": "Fixture tool description."
+        },
+        "terminate": {
+          "type": "boolean",
+          "description": "Fixture tool description."
+        },
+        "yield_time_ms": {
+          "type": "number",
+          "description": "Fixture tool description."
+        }
+      },
+      "required": [
+        "cell_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "function",
+    "name": "request_user_input",
+    "description": "Fixture tool description.",
+    "strict": false,
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "questions": {
+          "type": "array",
+          "description": "Fixture tool description.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "header": {
+                "type": "string",
+                "description": "Fixture tool description."
+              },
+              "id": {
+                "type": "string",
+                "description": "Fixture tool description."
+              },
+              "options": {
+                "type": "array",
+                "description": "Fixture tool description.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "description": {
+                      "type": "string",
+                      "description": "Fixture tool description."
+                    },
+                    "label": {
+                      "type": "string",
+                      "description": "Fixture tool description."
+                    }
+                  },
+                  "required": [
+                    "label",
+                    "description"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "question": {
+                "type": "string",
+                "description": "Fixture tool description."
+              }
+            },
+            "required": [
+              "id",
+              "header",
+              "question",
+              "options"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "questions"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "namespace",
+    "name": "collaboration",
+    "description": "Fixture tool description.",
+    "tools": [
+      {
+        "type": "function",
+        "name": "followup_task",
+        "description": "Fixture tool description.",
+        "strict": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string",
+              "description": "Fixture tool description.",
+              "encrypted": true
+            },
+            "target": {
+              "type": "string",
+              "description": "Fixture tool description."
+            }
+          },
+          "required": [
+            "target",
+            "message"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "type": "function",
+        "name": "interrupt_agent",
+        "description": "Fixture tool description.",
+        "strict": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "type": "string",
+              "description": "Fixture tool description."
+            }
+          },
+          "required": [
+            "target"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "type": "function",
+        "name": "list_agents",
+        "description": "Fixture tool description.",
+        "strict": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path_prefix": {
+              "type": "string",
+              "description": "Fixture tool description."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      {
+        "type": "function",
+        "name": "send_message",
+        "description": "Fixture tool description.",
+        "strict": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string",
+              "description": "Fixture tool description.",
+              "encrypted": true
+            },
+            "target": {
+              "type": "string",
+              "description": "Fixture tool description."
+            }
+          },
+          "required": [
+            "target",
+            "message"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "type": "function",
+        "name": "spawn_agent",
+        "description": "Fixture tool description.",
+        "strict": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "fork_turns": {
+              "type": "string",
+              "description": "Fixture tool description."
+            },
+            "message": {
+              "type": "string",
+              "description": "Fixture tool description.",
+              "encrypted": true
+            },
+            "model": {
+              "type": "string",
+              "description": "Fixture tool description."
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "description": "Fixture tool description."
+            },
+            "task_name": {
+              "type": "string",
+              "description": "Fixture tool description."
+            }
+          },
+          "required": [
+            "task_name",
+            "message"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "type": "function",
+        "name": "wait_agent",
+        "description": "Fixture tool description.",
+        "strict": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "timeout_ms": {
+              "type": "number",
+              "description": "Fixture tool description."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    ]
+  },
+  {
+    "type": "namespace",
+    "name": "mcp__cua_repl",
+    "description": "Fixture tool description.",
+    "tools": [
+      {
+        "type": "function",
+        "name": "js",
+        "description": "Fixture tool description.",
+        "strict": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "description": "Fixture tool description."
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "description": "Fixture tool description."
+            },
+            "title": {
+              "type": "string",
+              "description": "Fixture tool description."
+            }
+          },
+          "required": [
+            "code"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "type": "function",
+        "name": "js_reset",
+        "description": "Fixture tool description.",
+        "strict": false,
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    ]
+  },
+  {
+    "type": "web_search",
+    "external_web_access": false,
+    "search_content_types": [
+      "text",
+      "image"
+    ]
+  }
+]

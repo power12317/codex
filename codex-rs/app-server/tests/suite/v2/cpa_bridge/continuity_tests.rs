@@ -3,7 +3,7 @@ use anyhow::Context;
 use base64::Engine;
 use pretty_assertions::assert_eq;
 
-async fn exchange(ws: &mut Socket, mut request: Value) -> Result<(Value, Vec<u8>)> {
+pub(super) async fn exchange(ws: &mut Socket, mut request: Value) -> Result<(Value, Vec<u8>)> {
     request["params"]["request"]["stream"] = json!(true);
     send(ws, request).await?;
     let mut upstream = Value::Null;
@@ -78,9 +78,21 @@ async fn cpa_source_turn_continuity_isolation_and_default_stderr() -> Result<()>
             native["root_turn_id"].clone(),
             body["prompt_cache_key"].clone()
         ),
-        (json!("turn-a"), json!("root-a"), json!("caller-cache"))
+        (
+            json!("turn-a"),
+            json!("root-a"),
+            native["session_id"].clone()
+        )
     );
-    assert_eq!(first["headers"]["session-id"], json!(["caller-cache"]));
+    assert_eq!(
+        first["headers"]["session-id"],
+        json!([native["session_id"]])
+    );
+    assert_eq!(native["session_id"], native["thread_id"]);
+    assert_eq!(
+        first["headers"]["thread-id"],
+        first["headers"]["session-id"]
+    );
     request["params"]["request"]["client_metadata"] = source.clone();
     request["params"]["request"]["test_state"] = json!("second-ignored");
     let (second, _) = exchange(&mut ws, request.clone()).await?;
@@ -97,11 +109,7 @@ async fn cpa_source_turn_continuity_isolation_and_default_stderr() -> Result<()>
         json!(["first"])
     );
 
-    for (field, value) in [
-        ("turn_id", "turn-b"),
-        ("thread_id", "other-thread"),
-        ("session_id", "other-session"),
-    ] {
+    for (field, value) in [("turn_id", "turn-b"), ("thread_id", "other-thread")] {
         let mut isolated = request.clone();
         isolated["params"]["request"][field] = json!(value);
         assert!(
@@ -132,13 +140,29 @@ async fn cpa_source_turn_continuity_isolation_and_default_stderr() -> Result<()>
         .as_object_mut()
         .unwrap()
         .remove("turn_id");
-    for _ in 0..2 {
-        assert!(
-            exchange(&mut ws, request.clone()).await?.0["headers"]
-                .get("x-codex-turn-state")
-                .is_none()
-        );
-    }
+    let (synthetic_first, _) = exchange(&mut ws, request.clone()).await?;
+    assert!(
+        synthetic_first["headers"]
+            .get("x-codex-turn-state")
+            .is_none()
+    );
+    let first_body: Value = serde_json::from_str(synthetic_first["body"].as_str().unwrap())?;
+    let (synthetic_second, _) = exchange(&mut ws, request.clone()).await?;
+    let second_body: Value = serde_json::from_str(synthetic_second["body"].as_str().unwrap())?;
+    assert_eq!(
+        synthetic_second["headers"]["x-codex-turn-state"],
+        json!(["second-ignored"])
+    );
+    let synthetic_turn = first_body["client_metadata"]["turn_id"].as_str().unwrap();
+    uuid::Uuid::parse_str(synthetic_turn)?;
+    assert_eq!(
+        second_body["client_metadata"]["turn_id"],
+        json!(synthetic_turn)
+    );
+    assert_eq!(
+        second_body["client_metadata"]["session_id"],
+        native["session_id"]
+    );
     let mut left = request.clone();
     left["params"]["request"]["turn_id"] = json!("concurrent-left");
     left["params"]["request"]["test_state"] = json!("left-state");

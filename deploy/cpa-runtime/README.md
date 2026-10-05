@@ -91,3 +91,18 @@ checks `/readyz` on each architecture, and merges a multiarch manifest for the d
 It never updates `latest`. The image digest is recorded in the Actions summary.
 A triggered workflow is not evidence of a successful publication. GHCR package
 visibility and anonymous manifest access must be checked after publication.
+
+## Runtime timezone
+
+The image does not select a timezone from a user's nationality, language, or
+location. The published Debian runtime defaults to `Etc/UTC`. CPA is a separate
+container; its timezone does not set the Codex worker timezone. To follow the
+deployment host, pass its timezone configuration at deployment (for example,
+read-only `/etc/localtime` and `/etc/timezone` mounts on hosts that provide both
+files), without a conflicting `TZ` override. Docker does not inherit this
+configuration automatically. No regional timezone is hardcoded in this image.
+
+Verify the running container with `date '+%Z %z'`, `printenv TZ`,
+`readlink /etc/localtime` and `cat /etc/timezone`. The inference adapter uses the
+worker's effective local date/timezone for the current time context; it does not
+replace historical dates, caller paths or caller OS descriptions.

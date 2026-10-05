@@ -17,6 +17,12 @@ pub struct InferenceIdentity {
 }
 
 impl InferenceIdentity {
+    /// Prefer a source thread, then a source session, within the CPA RPC scope.
+    /// Cache keys are routing hints and never define a conversation's identity.
+    pub fn conversation_key(&self) -> Option<&str> {
+        self.thread_id.as_deref().or(self.session_id.as_deref())
+    }
+
     pub fn from_request(request: &Map<String, Value>) -> Self {
         let metadata = request.get("client_metadata").and_then(Value::as_object);
         let nested: Option<Value> = metadata
@@ -66,8 +72,12 @@ impl InferenceSession {
         source: &InferenceIdentity,
     ) -> anyhow::Result<Self> {
         let namespace = Uuid::new_v5(&Uuid::NAMESPACE_OID, scope.as_bytes());
-        let session_id = Uuid::new_v5(&namespace, &serde_json::to_vec(&source.session_id)?);
-        let thread_id = Uuid::new_v5(&session_id, &serde_json::to_vec(&source.thread_id)?);
+        anyhow::ensure!(
+            source.turn_id.is_some(),
+            "inference turn_id must be resolved"
+        );
+        let session_id = Uuid::new_v5(&namespace, &serde_json::to_vec(&source.conversation_key())?);
+        let thread_id = session_id;
         let client = ModelClient::new(
             Some(auth),
             AgentIdentityAuthPolicy::JwtOnly,
