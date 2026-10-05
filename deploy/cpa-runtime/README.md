@@ -92,7 +92,8 @@ independent account heartbeat or synthetic analytics event is added.
 See the [v3 contract](../../codex-rs/app-server/docs/cpa-bridge-v3.md) and
 [validation record](../../codex-rs/app-server/docs/cpa-bridge-validation.md).
 
-Pushes to `codex/cpa-managed-auth` run `.github/workflows/cpa-runtime-image.yml`.
+Pushes to `main` run `.github/workflows/cpa-runtime-image.yml`. The existing
+`cpa-managed-auth` image tag remains available for deployed clients.
 The workflow builds this Dockerfile on native Ubuntu amd64 and arm64 runners,
 checks `/readyz` on each architecture, and merges a multiarch manifest for the dedicated
 `ghcr.io/power12317/codex-cpa-runtime:cpa-managed-auth` tag and an immutable

@@ -2,7 +2,7 @@ name: CPA runtime image
 
 on:
   push:
-    branches: [codex/cpa-managed-auth]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   image:
-    if: github.ref == 'refs/heads/codex/cpa-managed-auth'
+    if: github.repository == 'power12317/codex' && github.ref == 'refs/heads/main'
     name: Runtime (${{ matrix.arch }})
     strategy:
       fail-fast: false
@@ -41,7 +41,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and publish the CPA branch image
+      - name: Build and publish the CPA runtime image
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
