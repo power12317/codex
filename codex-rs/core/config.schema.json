@@ -1151,6 +1151,9 @@
             "sqlite": {
               "type": "boolean"
             },
+            "stable_environment_tools": {
+              "type": "boolean"
+            },
             "standalone_web_search": {
               "type": "boolean"
             },
@@ -7341,6 +7344,9 @@
           "$ref": "#/definitions/FeatureToml_for_SleepToolConfigToml"
         },
         "sqlite": {
+          "type": "boolean"
+        },
+        "stable_environment_tools": {
           "type": "boolean"
         },
         "standalone_web_search": {
