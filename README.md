@@ -1,81 +1,70 @@
-<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
-<p align="center">
-  <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
-</p>
-</br>
-If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE.</a>
-</br>If you want the desktop app experience, run <code>codex app</code> or visit <a href="https://chatgpt.com/codex?app-landing-page=true">the Codex App page</a>.
-</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>.</p>
+# Codex Server
 
----
+Codex Server exposes native Codex inference through a long-running service for
+third-party applications. A master process accepts requests and supervises one
+worker per enabled credential. Workers rebuild native requests, map session and
+thread identities, and stream model responses back to the caller.
 
-## Quickstart
+CPA is one integration. Any application that implements the documented WebSocket
+protocol can connect without running CPA.
 
-### Installing and running Codex CLI
+## What the service provides
 
-Run the following on Mac or Linux to install Codex CLI:
+- Credential workers with independent configuration, installation identity and
+  authentication state, managed by a directory-watching master.
+- Responses inference through Codex's native request builder and provider/auth
+  transport, including supported function, custom, namespace and web-search tools.
+- Logical session/thread hierarchies, bounded turn routing state and selective
+  restoration of source identities in responses.
+- Streaming response bytes, cancellation, manual OAuth and credential reload.
+- A Linux amd64/arm64 image containing the app-server executable and its runtime
+  dependencies. The image does not include the CLI or a local tool execution host.
 
-```shell
-curl -fsSL https://chatgpt.com/codex/install.sh | sh
-```
+The inference path does not create local conversations, persist message history,
+execute returned tool calls or generate additional titles. Callers provide their
+own history and execute their own client-side tools. Diagnostic notifications can
+contain full request/response payloads; clients decide whether to retain them.
 
-Run the following on Windows to install Codex CLI:
+## Start here
 
-```shell
-powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"
-```
+1. [Install and start the service](docs/install.md).
+2. [Connect a third-party application](docs/codex-server-api.md).
+3. [Deploy with containers or integrate with CPA](deploy/cpa-runtime/README.md).
+4. [Read the identity and request-mapping contract](codex-rs/app-server/docs/cpa-bridge-v3.md).
 
-The standalone installers download from `https://releases.openai.com/codex` by default and fall back to GitHub Releases if a metadata or asset download is unavailable. To force GitHub Releases, set `CODEX_INSTALLER_USE_RELEASES_OPENAI_COM` to `false` (`0` and `no` are also accepted):
+The default endpoints are:
 
-```shell
-curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_INSTALLER_USE_RELEASES_OPENAI_COM=false sh
-```
+| Endpoint                            | Purpose                                          |
+| ----------------------------------- | ------------------------------------------------ |
+| `GET http://127.0.0.1:38317/readyz` | Listener readiness; not an account-health check. |
+| `ws://127.0.0.1:38317/cpa/v1/ws`    | JSON-RPC-style control and inference stream.     |
 
-```powershell
-$env:CODEX_INSTALLER_USE_RELEASES_OPENAI_COM='false'; irm https://chatgpt.com/codex/install.ps1 | iex
-```
+Protocol version **3** retains the `cpa/*` method names, `/cpa/v1/ws` path,
+`CODEX_CPA_*` settings and credential-file format for compatibility. These names
+do not require the CPA application. The executable remains `codex-app-server`.
+This listener does not expose an HTTP `POST /v1/responses` endpoint or native
+`thread/start` / `turn/start` methods; callers use `cpa/inference/start`.
 
-Codex CLI can also be installed via the following package managers:
+The listener binds to loopback and has no built-in client authentication. Local
+applications can connect directly. Remote applications can use an SSH tunnel or
+an authenticated WebSocket reverse proxy, as described in the deployment guide.
 
-```shell
-# Install using npm
-npm install -g @openai/codex
-```
+## Images and source
 
-```shell
-# Install using Homebrew
-brew install --cask codex
-```
+Repository: [power12317/codex-server](https://github.com/power12317/codex-server).
+The main-branch workflow publishes `ghcr.io/power12317/codex-server:main` and
+`:latest` after native amd64/arm64 builds and startup checks succeed. A workflow
+trigger alone does not confirm publication. See the
+[deployment guide](deploy/cpa-runtime/README.md) for migration from the previous
+`codex-cpa-runtime` image name and building locally.
 
-Then simply run `codex` to get started.
+Codex Server is a fork of [OpenAI Codex](https://github.com/openai/codex). Native
+crate names, upstream component documentation and license notices are retained.
+The upstream CLI, SDK and full app-server sources are present for maintenance;
+their documentation describes those components, not the inference-only listener.
 
-<details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
+- [Development and issue reporting](docs/contributing.md)
+- [Protocol validation record](codex-rs/app-server/docs/cpa-bridge-validation.md)
+- [Upstream Codex documentation](https://developers.openai.com/codex)
 
-Each GitHub Release contains many executables, but in practice, you likely want one of these:
-
-- macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
-- Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
-
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
-
-</details>
-
-### Using Codex with your ChatGPT plan
-
-Run `codex` and select **Sign in with ChatGPT**. We recommend signing into your ChatGPT account to use Codex as part of your Plus, Pro, Business, Edu, or Enterprise plan. [Learn more about what's included in your ChatGPT plan](https://help.openai.com/en/articles/11369540-codex-in-chatgpt).
-
-You can also use Codex with an API key, but this requires [additional setup](https://developers.openai.com/codex/auth#sign-in-with-an-api-key).
-
-## Docs
-
-- [**Codex Documentation**](https://developers.openai.com/codex)
-- [**Contributing**](./docs/contributing.md)
-- [**Installing & building**](./docs/install.md)
-- [**Open source fund**](./docs/open-source-fund.md)
-
-This repository is licensed under the [Apache-2.0 License](LICENSE).
+Licensed under the [Apache-2.0 License](LICENSE).

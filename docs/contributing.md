@@ -1,4 +1,17 @@
-## Contributing
+# Contributing to Codex Server
+
+For Codex Server service, worker, deployment and integration changes, coordinate
+with the maintainer of [power12317/codex-server](https://github.com/power12317/codex-server).
+When reporting a problem, include the source/image revision, deployment mode,
+protocol capabilities and a minimal request with credentials and private content
+removed. See the
+[build guide](install.md) and [service API](codex-server-api.md) for this fork.
+
+The following policy is retained from OpenAI Codex and applies to the upstream
+project. Its restriction on external pull requests is an upstream policy, not a
+new contribution policy established for this fork.
+
+## Upstream Codex contribution policy
 
 We welcome community contributions through the [openai/codex issue tracker](https://github.com/openai/codex/issues). Bug reports, root-cause analyses, and feature requests help us understand what matters most and improve Codex.
 

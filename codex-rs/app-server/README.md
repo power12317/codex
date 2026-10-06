@@ -1,3 +1,15 @@
+# Codex Server and the native app-server
+
+For the Codex Server master/worker service, start with the
+[third-party API reference](../../docs/codex-server-api.md),
+[deployment guide](../../deploy/cpa-runtime/README.md), and
+[v3 inference contract](docs/cpa-bridge-v3.md). Setting `CODEX_CPA_AUTH_DIR`
+selects this inference-only mode. Its public listener exposes the documented
+`cpa/*` methods, not the native thread/tool APIs below.
+
+The remainder of this file documents the retained upstream app-server component
+and its full agent protocol when run outside the service master mode.
+
 # Guardian circuit-breaker errors
 
 Set `auto_review.circuit_break_action = "strict"` to include `TooManyDenials` in

@@ -1,4 +1,30 @@
-# CPA bridge validation record
+# Codex Server inference validation record
+
+## 2026-10-06 Codex Server naming and integration documentation
+
+Source baseline: `77e714af9a421cf3bd9668bdd30f51136744bcdf`. The fork is now
+`power12317/codex-server`. Product documentation remains in English, matching the
+existing documents. The service protocol, Rust crate/binary names and runtime
+behavior are unchanged by this documentation and packaging update.
+
+- Updated the project overview, installation and deployment guides, and added
+  a third-party API reference with a dependency-free Node.js client example.
+- Fixed the image workflow's repository guard after the GitHub rename; new image
+  publications target `ghcr.io/power12317/codex-server:main` and `:latest`.
+- Ran the example against the existing local debug master/worker executable with
+  temporary state, fake credentials and a local HTTP model fixture. Readiness,
+  initialization and capabilities worked with an empty credential directory.
+  Inference restored source session IDs; a rejected HTTP request exited with an
+  error; Ctrl+C produced cancellation status 499. Three inference calls made
+  exactly three model POSTs and wrote no conversation rollout JSONL files.
+- Workflow actionlint, entrypoint shellcheck, JavaScript syntax, changed-document
+  local links/JSON examples, formatting and whitespace checks passed. No Rust
+  production code changed, so the full Rust suite was not rerun for this rename.
+
+The example verification did not use real model-service credentials or billable
+inference. Container builds and startup checks run in the main-branch image
+workflow. New registry tags are usable only after that workflow publishes them.
+Historical validation records below retain their original repository/image names.
 
 ## 2026-10-05 logical hierarchy and response identity mapping
 

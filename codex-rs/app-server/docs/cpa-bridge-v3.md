@@ -1,18 +1,22 @@
-# CPA / Codex master protocol v3
+# Codex Server inference protocol v3
 
-Contract identifier: **V3-SEP-20260927**. This document supersedes the earlier
-chat alternatives concerning body notifications.
+Contract identifier: **V3-SEP-20260927**. This is the inference-only contract for
+Codex Server clients, including CPA. The historical `cpa/*` methods, endpoint path
+and environment variables remain wire-compatible; they do not require CPA.
 
-Current upstream: official `openai/codex` default branch `main`, commit
-`afb436df8b70bb5bc57b86d9a3e829968988cd21`, fetched on 2026-10-04 at
-20:42:10 +08:00. This is a default-branch source merge, not a release-tag rebase.
-The CPA v3 envelope and dedicated image tag remain unchanged; normalization rules
-for this branch are specified below.
+Start with the [third-party API reference](../../../docs/codex-server-api.md) for
+connection setup, complete request examples, credentials, errors and cancellation.
+See the [deployment guide](../../../deploy/cpa-runtime/README.md) for images.
+
+The `upstreamRevision` capability currently reports the adapter baseline
+`afb436df8b70bb5bc57b86d9a3e829968988cd21`. It is not the current fork revision or
+a complete record of subsequent upstream merges. Use the image's
+`org.opencontainers.image.revision` label and Git history for the deployed source.
 
 ## Identity and state
 
-`credentialId` is CPA's existing file-backed `Auth.ID`: the case-sensitive path
-relative to the shared auth directory on Linux. There is no separate worker ID,
+`credentialId` is the case-sensitive path relative to the credential directory
+on Linux. CPA uses its existing file-backed `Auth.ID` for this value. There is no separate worker ID,
 account ID, credential filename setting, or owner field in the bridge contract.
 The master uses that same ID for its per-credential process map and private state
 directory: `CODEX_HOME/<credentialId>/`. Original names, extensions, spaces and
@@ -40,7 +44,7 @@ return master capabilities:
 ```
 
 Reload scans one credential or the directory and waits for the corresponding
-processes to start/stop. It does not change credential control fields. CPA owns
+processes to start/stop. It does not change credential control fields. The integrating application owns credential
 selection and effective flags; the master only applies them.
 
 ## Inference
@@ -79,7 +83,7 @@ top-level request fields, then flat
 `x-codex-parent-thread-id` and `x-codex-window-id` are accepted aliases. Identity
 values are limited to 4096 bytes each and cannot contain control characters.
 
-The credential and outer CPA `sessionId` form an isolation namespace. Within it,
+The credential and outer client `sessionId` form an isolation namespace. Within it,
 the source session identifies the root (falling back to the source thread, then
 the RPC scope if both are absent). A deterministic UUID identifies that native
 session. A missing thread or a thread equal to the source session uses the root
@@ -149,8 +153,8 @@ retains actual native request/response identities for troubleshooting.
 
 This is not global string replacement: `response.id`, output/item IDs, `call_id`,
 tool arguments/results, model text, generic business `metadata`, `x-request-id`
-and opaque `turn_state` are untouched. Only what CPA actually passed to Codex can
-be restored; values already replaced inside CPA cannot be recovered here.
+and opaque `turn_state` are untouched. Only what the client actually passed to Codex Server can
+be restored; values already replaced inside a client cannot be recovered here.
 
 SSE frames are buffered until their data can be examined. Unchanged events retain
 their exact bytes, while modified JSON data is reserialized with non-data lines
@@ -165,9 +169,10 @@ are at most 64 KiB. These transient buffers are not persisted conversation stora
 - `cpa/auth/login/callback {loginId, redirectUrl}` -> `{status,error?}`.
 - `cpa/auth/login/status {loginId}` -> `{status,error?}`.
 
-The master remembers the login-to-credential association internally. CPA creates
-a new UUID-named Codex placeholder file only for an explicitly requested new
-authorization; reauthorization always uses the existing ID and original file.
+The master remembers the login-to-credential association internally. The integrating application creates
+an enabled credential placeholder before starting a new authorization; it chooses
+the relative filename. Reauthorization uses the existing ID and original file.
+CPA conventionally uses a UUID filename for new accounts.
 There is no separate independently refreshed auth.json copy.
 
 ## Native request mapping
@@ -215,7 +220,7 @@ Field handling:
 | response HTTP body | Restore matching known envelope identity fields, then forward as ordered base64 chunks; preserve opaque content. |
 
 The `sourceFormat` label does not convert whole Chat/Claude conversations into
-Responses. CPA still supplies the Responses request envelope and history.
+Responses. Every client supplies the Responses request envelope and history.
 
 HTTP authentication recovery can refresh credentials and retry a rejected 401;
 accepted HTTP streams are never replayed. Body EOF is transport completion, not

@@ -1,4 +1,4 @@
-name: Publish main CPA runtime image
+name: Publish Codex Server image
 
 on:
   push:
@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   image:
-    if: github.repository == 'power12317/codex' && github.ref == 'refs/heads/main'
+    if: github.repository == 'power12317/codex-server' && github.ref == 'refs/heads/main'
     name: Runtime (${{ matrix.arch }})
     strategy:
       fail-fast: false
@@ -41,7 +41,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and publish the CPA runtime image
+      - name: Build and publish the Codex Server image
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -50,7 +50,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             FORK_REVISION=${{ github.sha }}
-          outputs: type=image,name=ghcr.io/power12317/codex-cpa-runtime,push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=ghcr.io/power12317/codex-server,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=cpa-runtime-${{ matrix.arch }}
           cache-to: type=gha,scope=cpa-runtime-${{ matrix.arch }},mode=max
       - name: Verify the published runtime starts
@@ -65,7 +65,7 @@ jobs:
           trap 'docker logs cpa-runtime-smoke; docker rm -f cpa-runtime-smoke' EXIT
           docker run -d --name cpa-runtime-smoke --network host \
             -v "$RUNNER_TEMP/cpa-auth:/cpa-auth:ro" \
-            "ghcr.io/power12317/codex-cpa-runtime@${IMAGE_DIGEST}"
+            "ghcr.io/power12317/codex-server@${IMAGE_DIGEST}"
           for _attempt in $(seq 1 60); do
             if curl --fail --silent http://127.0.0.1:38317/readyz; then
               exit 0
@@ -80,13 +80,13 @@ jobs:
           IMAGE_ARCH: ${{ matrix.arch }}
         run: |
           {
-            echo "### CPA runtime image"
+            echo "### Codex Server image"
             echo "Source: ${SOURCE_REVISION}; architecture: ${IMAGE_ARCH}"
             echo "Digest: ${IMAGE_DIGEST}"
           } >> "$GITHUB_STEP_SUMMARY"
           mkdir -p "$RUNNER_TEMP/digests"
           touch "$RUNNER_TEMP/digests/${IMAGE_DIGEST#sha256:}"
-          echo "::notice title=Published CPA image::ghcr.io/power12317/codex-cpa-runtime@${IMAGE_DIGEST}"
+          echo "::notice title=Published Codex Server image::ghcr.io/power12317/codex-server@${IMAGE_DIGEST}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cpa-runtime-digests-${{ matrix.arch }}
@@ -113,7 +113,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Merge the verified native images
         env:
-          IMAGE_NAME: ghcr.io/power12317/codex-cpa-runtime
+          IMAGE_NAME: ghcr.io/power12317/codex-server
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -132,7 +132,7 @@ jobs:
             --tag "${IMAGE_NAME}:main" \
             --tag "${IMAGE_NAME}:latest" \
             "${sources[@]}"
-          echo '### Published multiarch CPA runtime' >> "$GITHUB_STEP_SUMMARY"
+          echo '### Published multiarch Codex Server' >> "$GITHUB_STEP_SUMMARY"
           echo '```text' >> "$GITHUB_STEP_SUMMARY"
           docker buildx imagetools inspect "${IMAGE_NAME}:main" | tee -a "$GITHUB_STEP_SUMMARY"
           docker buildx imagetools inspect "${IMAGE_NAME}:latest" | tee -a "$GITHUB_STEP_SUMMARY"

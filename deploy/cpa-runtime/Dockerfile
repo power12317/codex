@@ -10,15 +10,17 @@ WORKDIR /src
 COPY . .
 WORKDIR /src/codex-rs
 ENV CARGO_INCREMENTAL=0 CARGO_PROFILE_RELEASE_DEBUG=0 CARGO_BUILD_JOBS=2
-# CPA uses the app-server's native request builder, OAuth library and streaming
+# Codex Server uses the native request builder, OAuth library and streaming
 # bridge. It does not execute tools or need the CLI, V8 host or sandbox helpers.
 RUN cargo build --locked --release -p codex-app-server --bin codex-app-server
 RUN mkdir /out && cp target/release/codex-app-server /out/
 
 FROM ${RUNTIME_IMAGE}
 ARG FORK_REVISION=unrecorded-local-build
-LABEL org.opencontainers.image.revision=${FORK_REVISION} \
-    org.opencontainers.image.source="https://github.com/power12317/codex" \
+LABEL org.opencontainers.image.title="Codex Server" \
+    org.opencontainers.image.description="Native Codex inference service with credential workers and a streaming API" \
+    org.opencontainers.image.revision=${FORK_REVISION} \
+    org.opencontainers.image.source="https://github.com/power12317/codex-server" \
     io.codex.cpa.protocol-version="3" \
     io.codex.cpa.execution-mode="inference-only"
 RUN apt-get update && apt-get install -y --no-install-recommends \

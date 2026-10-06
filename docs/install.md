@@ -1,65 +1,98 @@
-## Installing & building
+# Installing and building Codex Server
 
-### System requirements
+Codex Server runs as a master process and one worker per enabled credential.
+Clients connect through the [service API](codex-server-api.md). CPA is optional.
 
-| Requirement                 | Details                                                         |
-| --------------------------- | --------------------------------------------------------------- |
-| Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11 **via WSL2** |
-| Git (optional, recommended) | 2.23+ for built-in PR helpers                                   |
-| RAM                         | 4-GB minimum (8-GB recommended)                                 |
+## Container deployment
 
-### DotSlash
+Use `ghcr.io/power12317/codex-server:latest` after its main-branch workflow has
+published successfully. See the [deployment guide](../deploy/cpa-runtime/README.md)
+for standalone Linux, CPA sidecar, remote access and timezone configuration.
+Only the app-server executable and runtime dependencies are packaged.
 
-The GitHub Release also contains a [DotSlash](https://dotslash-cli.com/) file for the Codex CLI named `codex`. Using a DotSlash file makes it possible to make a lightweight commit to source control to ensure all contributors use the same version of an executable, regardless of what platform they use for development.
+## Build from source
 
-### Build from source
+Clone this fork, not the upstream CLI distribution:
 
-```bash
-# Clone the repository and navigate to the root of the Cargo workspace.
-git clone https://github.com/openai/codex.git
-cd codex/codex-rs
+```sh
+git clone https://github.com/power12317/codex-server.git
+cd codex-server/codex-rs
+rustup show
+cargo build --locked --release -p codex-app-server --bin codex-app-server
+```
 
-# Install the Rust toolchain, if necessary.
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source "$HOME/.cargo/env"
-rustup component add rustfmt
-rustup component add clippy
-# Install helper tools used by the workspace justfile:
-cargo install --locked just
-# DotSlash fetches pinned development tools such as buildifier on first use.
-cargo install --locked dotslash
-# Install nextest for the `just test` helper.
-cargo install --locked cargo-nextest
+Install Rust through [rustup](https://rustup.rs/) if needed. The workspace's
+`rust-toolchain.toml` selects the supported toolchain. Native build dependencies
+for the Linux image are listed in the
+[Dockerfile](../deploy/cpa-runtime/Dockerfile); building on another operating
+system also requires its native compiler and development libraries. Building
+the full workspace or the CLI is not required to run this service.
 
-# Build Codex.
-cargo build
+From the repository root, create private credential and state directories outside
+this checkout and launch the executable:
 
-# Launch the TUI with a sample prompt.
-cargo run --bin codex -- "explain this codebase to me"
+```sh
+mkdir -p "$HOME/.local/share/codex-server/auths" "$HOME/.local/share/codex-server/state"
+chmod 700 "$HOME/.local/share/codex-server/auths" "$HOME/.local/share/codex-server/state"
+CODEX_CPA_AUTH_DIR="$HOME/.local/share/codex-server/auths" \
+CODEX_HOME="$HOME/.local/share/codex-server/state" \
+  ./codex-rs/target/release/codex-app-server
+```
 
-# After making changes, use the root justfile helpers (they default to codex-rs):
+The credential directory must exist. An empty directory starts the listener
+without any account workers. In another terminal:
+
+```sh
+curl --fail http://127.0.0.1:38317/readyz
+```
+
+The response is `ok`. Provision a credential using the
+[credential and OAuth instructions](codex-server-api.md#credentials-and-oauth)
+before submitting inference. Keep credential files out of version control.
+
+## Runtime settings
+
+| Setting              | Meaning                                                                                                         |
+| -------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `CODEX_CPA_AUTH_DIR` | Existing credential directory; setting it selects the master service mode.                                      |
+| `CODEX_HOME`         | Persistent worker-state root; the master defaults to `/var/lib/codex`. Set a writable directory for local runs. |
+| `CODEX_CPA_PORT`     | Loopback HTTP/WebSocket port; default `38317`.                                                                  |
+
+Workers use `CODEX_HOME/<credentialId>/config.toml`, where the credential ID is
+its filename relative to the credential directory, including nested directories.
+Only the master supplies the child-only `CODEX_CPA_AUTH_FILE` and
+`CODEX_CPA_CREDENTIAL_ID` variables. Do not set them on the master.
+
+The current master binds to `127.0.0.1`; there is no listen-address setting in
+this API. It does not automatically load account credentials from an upstream
+CLI installation or use an arbitrary `OPENAI_API_KEY` supplied by a caller.
+
+## Development checks
+
+The workspace uses `just` and `cargo-nextest`. Install them if needed:
+
+```sh
+cargo install --locked just cargo-nextest
+rustup component add rustfmt clippy
+```
+
+From the repository root:
+
+```sh
+just test -p codex-app-server --lib --test all cpa_
+just test -p codex-app-server-protocol --lib
 just fmt
-just fix -p <crate-you-touched>
-
-# Run the relevant tests (project-specific is fastest), for example:
-just test -p codex-tui
-# `just test` runs the test suite via nextest:
-just test
-# Avoid `--all-features` for routine local runs because it increases build
-# time and `target/` disk usage by compiling additional feature combinations.
 ```
 
-## Tracing / verbose logging
+Use checks appropriate to the modified component. Native CLI, TUI and SDK
+development remain available in the source tree, with their own upstream
+documentation. Avoid `--all-features` for routine service builds.
 
-Codex is written in Rust, so it honors the `RUST_LOG` environment variable to configure its logging behavior.
+## Logs
 
-The TUI records diagnostics in bounded local stores by default. Set `log_dir` explicitly to enable a plaintext TUI log for a run:
-
-```bash
-codex -c log_dir=./.codex-log
-tail -F ./.codex-log/codex-tui.log
-```
-
-The non-interactive mode (`codex exec`) defaults to `RUST_LOG=error`, but messages are printed inline, so there is no need to monitor a separate file.
-
-See the Rust documentation on [`RUST_LOG`](https://docs.rs/env_logger/latest/env_logger/#enabling-logging) for more information on the configuration options.
+Master and worker diagnostics go to stderr. The default-visible `cpa.worker.started`
+event identifies the credential, PID, private state directory and config path.
+`cpa.request.*` events identify request mapping and lifecycle. The `cpa/*` log
+prefixes are retained for compatibility. Worker stdout is reserved for internal
+JSON-RPC messages. See the [API reference](codex-server-api.md#diagnostics) for
+diagnostic notifications delivered to clients.
