@@ -313,6 +313,15 @@ already sent to the upstream service cannot be recalled.
 - `response`: `requestId`, `statusCode`, `headers`, optional `body` and `oaiLbNode`.
 - `error`: `requestId` and `message`.
 
+`oaiLbNode` describes this HTTP exchange's gateway node. Request notifications
+use the actual outbound `Cookie` header. Response notifications use the response's
+`__oailb` cookie when present, including an empty result for deletion or an invalid
+value; otherwise they retain the node from that exact request. Other response
+cookies do not clear it. The same rule applies to successful and HTTP error
+responses. Network errors without an HTTP response leave the request notification
+as the available observation. No additional node cache or cookie-jar reread is
+used to infer the response node.
+
 These describe native upstream exchanges, including rejected authentication
 attempts. Diagnostic identities remain native; source identity restoration
 applies to the business response. Authorization/cookie headers are redacted, but

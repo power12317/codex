@@ -60,7 +60,11 @@ Ordered notifications:
 - `cpa/inference/upstream`: existing `request`, `response`, and `error` log
   notifications with `requestId`, actual URL/method/headers/body/status/message.
   Header values are string arrays. Actual token SHA256 and gateway node remain
-  optional logging metadata.
+  optional logging metadata. Request `oaiLbNode` is extracted from the actual
+  outbound Cookie header. Response `oaiLbNode` uses a response `__oailb` when
+  present (an empty/invalid value remains empty), otherwise the same request's
+  node, for both success and HTTP errors. Other Set-Cookie values do not clear it.
+  This is an exchange-local observation, not an additional routing-state cache.
 - **`cpa/inference/body {requestId, bodyBase64}`**: HTTP response bytes after the
   selective identity projection described below.
   This is the only business-response body channel. Do not emit an additional

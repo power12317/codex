@@ -98,6 +98,15 @@ impl HttpTransport for UpstreamTransport {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
             .map(|token| format!("{:x}", Sha256::digest(token.as_bytes())));
+        // Keep the node from this exact outbound request, not a later cookie-jar read.
+        let request_node = prepared
+            .headers
+            .get_all(axum::http::header::COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| value.split(';'))
+            .find_map(oai_lb_cookie)
+            .and_then(oai_lb_node);
         self.notify(CpaInferenceUpstreamNotification::Request {
             request_id: self.request_id.clone(),
             url: req.url.clone(),
@@ -105,7 +114,7 @@ impl HttpTransport for UpstreamTransport {
             headers: log_headers(&prepared.headers),
             body: String::from_utf8_lossy(&prepared.body_bytes()).into_owned(),
             access_token_sha256,
-            oai_lb_node: oai_lb_node(&prepared.headers),
+            oai_lb_node: request_node.clone(),
         })
         .await?;
         let result = self.inner.stream(req).await;
@@ -115,7 +124,7 @@ impl HttpTransport for UpstreamTransport {
                 status_code: response.status.as_u16(),
                 headers: log_headers(&response.headers),
                 body: None,
-                oai_lb_node: oai_lb_node(&response.headers),
+                oai_lb_node: response_oai_lb_node(Some(&response.headers), request_node.as_deref()),
             },
             Err(TransportError::Http {
                 status,
@@ -127,7 +136,7 @@ impl HttpTransport for UpstreamTransport {
                 status_code: status.as_u16(),
                 headers: headers.as_ref().map(log_headers).unwrap_or_default(),
                 body: body.clone(),
-                oai_lb_node: headers.as_ref().and_then(oai_lb_node),
+                oai_lb_node: response_oai_lb_node(headers.as_ref(), request_node.as_deref()),
             },
             Err(error) => CpaInferenceUpstreamNotification::Error {
                 request_id: self.request_id.clone(),
@@ -165,14 +174,28 @@ pub(super) fn log_headers(headers: &HeaderMap) -> BTreeMap<String, Vec<String>> 
         .collect()
 }
 
-fn oai_lb_node(headers: &HeaderMap) -> Option<String> {
-    let cookie = headers
-        .get_all(axum::http::header::SET_COOKIE)
-        .iter()
-        .chain(headers.get_all(axum::http::header::COOKIE).iter())
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(';'))
-        .find_map(|part| part.trim().strip_prefix("__oailb="))?;
+fn response_oai_lb_node(headers: Option<&HeaderMap>, request_node: Option<&str>) -> Option<String> {
+    let response_cookie = headers.and_then(|headers| {
+        headers
+            .get_all(axum::http::header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .filter_map(|value| value.split(';').next())
+            .find_map(oai_lb_cookie)
+    });
+    match response_cookie {
+        // An explicit deletion or invalid value must not fall back to the request node.
+        Some(cookie) => oai_lb_node(cookie),
+        None => request_node.map(str::to_owned),
+    }
+}
+
+fn oai_lb_cookie(part: &str) -> Option<&str> {
+    let (name, value) = part.trim().split_once('=')?;
+    (name.trim() == "__oailb").then_some(value.trim())
+}
+
+fn oai_lb_node(cookie: &str) -> Option<String> {
     let payload = cookie.trim_matches('"').split('.').nth(/*n*/ 1)?;
     let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(payload)

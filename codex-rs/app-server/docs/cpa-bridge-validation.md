@@ -1,5 +1,35 @@
 # Codex Server inference validation record
 
+## 2026-10-07 exchange-local gateway node reporting
+
+Baseline: `d9470b49e`. Response `oaiLbNode` now prefers an explicit response
+`__oailb` value; absent that cookie, it reports the node captured from the exact
+outbound request. Explicit empty/invalid response values remain null. Success
+and HTTP error responses use the same rule. No response-time cookie-jar lookup,
+node cache, RPC field, protocol version or retry policy was added.
+
+- CPA unit and real-process integration suite: **47/47 passed**, including ten
+  new gateway-node cases. Eight cases each exercise HTTP 200 and HTTP 400:
+  request-only, unrelated response cookie, response replacement, response-only,
+  neither, unrelated cookie without a request node, deletion and invalid value.
+- The mock HTTP server's received Cookie headers are checked against the request
+  observations delivered over the real master/worker WebSocket IPC. Cookie and
+  Set-Cookie values remain redacted in notifications.
+- Four overlapping exchanges across two credential workers confirm that response
+  replacement on one exchange cannot overwrite another request's fallback node.
+- A local TLS peer closes before returning any HTTP response. The original request
+  notification retains its node, an error notification follows, and no response
+  notification is invented. TLS setup is used because a host proxy can translate
+  a plain HTTP disconnect into an actual HTTP 502 response.
+- Strict production-library Clippy passed with `-D warnings`. Extending Clippy
+  to the entire `all` integration target reports 14 existing `unwrap_used`
+  diagnostics in unchanged `hierarchy_tests.rs` and `parser_tests.rs`; the new
+  tests have no remaining diagnostics. Those unrelated files were not modified.
+  Rust formatting, API documentation formatting and `git diff --check` passed.
+- Native User-Agent/originator, master/worker identities, protocol definitions,
+  entrypoint and image publication configuration are byte-identical to baseline.
+  All credentials, node cookies and HTTP services in these tests are fixtures.
+
 ## 2026-10-06 Codex Server naming and integration documentation
 
 Source baseline: `77e714af9a421cf3bd9668bdd30f51136744bcdf`. The fork is now
