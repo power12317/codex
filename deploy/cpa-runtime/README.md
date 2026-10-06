@@ -1,23 +1,14 @@
-# Local CPA runtime image
+# CPA inference runtime image
 
-Build from this repository root (no registry push is required):
+Pushes to main publish `ghcr.io/power12317/codex-cpa-runtime:main` and `:latest`.
+Deploy through CPA's Compose file; no Codex source checkout is needed on the host.
 
-```sh
-docker build -f deploy/cpa-runtime/Dockerfile \
-  --build-arg FORK_REVISION="$(git rev-parse HEAD)" \
-  -t codex-cpa-runtime:local .
-```
-
-The build uses Rust 1.95.0, Debian bookworm and `Cargo.lock` (`--locked`).
-`fetch-v8.py` downloads the official Codex-built sandbox archive/binding pair and
-verifies both against the release manifest, then verifies that manifest against
-the SHA-256 digest pinned in this repository, matching the upstream CI action. For
-immutable deployment inputs pass `RUST_IMAGE` and `RUNTIME_IMAGE` with verified
-image digests and pin the resulting runtime image digest in the CPA overlay.
-Record the fork commit and any uncommitted patch separately. A tag and mutable apt
-repositories alone do not promise byte-identical rebuilds. This Dockerfile has not
-been built on the macOS development host; Linux container validation is required
-before deployment. Budget sufficient disk for Rust and the V8 companion build.
+The build uses Rust 1.95.0, Debian bookworm and `Cargo.lock` (`--locked`). It builds
+only `codex-app-server`, which contains the CPA master, credential workers, native
+request builder, OAuth library and response bridge. The inference-only image
+does not build or package the CLI, V8/Code Mode host or local execution helpers.
+Both native Linux architectures must pass the startup check before either tag
+is updated. The fork source commit is recorded in the image revision label.
 
 The image runs one master and one native app-server child per enabled CPA
 credential. Add this fragment to CPA's Compose file; no additional environment,
@@ -26,20 +17,18 @@ command, bridge key, credential filename or port mapping is needed:
 ```yaml
 services:
   codex-master:
-    image: ghcr.io/power12317/codex-cpa-runtime:cpa-managed-auth
+    image: ghcr.io/power12317/codex-cpa-runtime:latest
     network_mode: service:cli-proxy-api
     user: "0:0"
     volumes:
       - ./auths:/cpa-auth
-      - codex-runtime:/var/lib/codex
+      - ./codex-data:/var/lib/codex
     restart: unless-stopped
-
-volumes:
-  codex-runtime:
 ```
 
 Use the same runtime UID as CPA (the example matches a root CPA container).
-The shared auth directory is `/cpa-auth`; private state is `/var/lib/codex`.
+The shared auth directory is `/cpa-auth`; private state is stored in the CPA
+directory's `./codex-data`, mounted at `/var/lib/codex`.
 The loopback endpoint is `ws://127.0.0.1:38317/cpa/v1/ws`, with `/readyz` on that
 same internal port. The existing CPA and gost services need no port changes.
 
@@ -84,21 +73,20 @@ contexts and do not trigger additional title generation. Requests must include
 their own history; worker restart clears turn state. Full native request/response
 diagnostics still use the existing CPA log channel.
 
-`codex`, `codex-app-server`, `exec-server`, `codex-code-mode-host` and the official
-`bwrap` helper remain in the image. Enabled children retain applicable native
-background activities. Refresh runs on credential access/401 recovery; no
-independent account heartbeat or synthetic analytics event is added.
+The master starts credential workers using the same `codex-app-server` binary.
+OAuth uses the linked `codex-login` library. Enabled children retain applicable
+native background activities. Refresh runs on credential access/401 recovery;
+no independent account heartbeat or synthetic analytics event is added.
 
 See the [v3 contract](../../codex-rs/app-server/docs/cpa-bridge-v3.md) and
 [validation record](../../codex-rs/app-server/docs/cpa-bridge-validation.md).
 
-Pushes to `main` run `.github/workflows/cpa-runtime-image.yml`. The existing
-`cpa-managed-auth` image tag remains available for deployed clients.
-The workflow builds this Dockerfile on native Ubuntu amd64 and arm64 runners,
-checks `/readyz` on each architecture, and merges a multiarch manifest for the dedicated
-`ghcr.io/power12317/codex-cpa-runtime:cpa-managed-auth` tag and an immutable
-`sha-<full commit>` tag.
-It never updates `latest`. The image digest is recorded in the Actions summary.
+Pushes to `main` run `.github/workflows/cpa-runtime-image.yml`.
+The workflow builds on native Ubuntu amd64 and arm64 runners and checks `/readyz`
+on each architecture before publishing a multiarch manifest under
+`ghcr.io/power12317/codex-cpa-runtime:main` and `:latest`. Native images are
+transferred between jobs by digest, without architecture or SHA image tags.
+The source revision and image digests are recorded in the Actions summary.
 A triggered workflow is not evidence of a successful publication. GHCR package
 visibility and anonymous manifest access must be checked after publication.
 
