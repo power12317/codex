@@ -10,7 +10,7 @@ behavior are unchanged by this documentation and packaging update.
 - Updated the project overview, installation and deployment guides, and added
   a third-party API reference with a dependency-free Node.js client example.
 - Fixed the image workflow's repository guard after the GitHub rename; new image
-  publications target `ghcr.io/power12317/codex-server:main` and `:latest`.
+  publications target `ghcr.io/power12317/codex-server:latest`.
 - Ran the example against the existing local debug master/worker executable with
   temporary state, fake credentials and a local HTTP model fixture. Readiness,
   initialization and capabilities worked with an empty credential directory.

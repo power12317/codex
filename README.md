@@ -52,8 +52,8 @@ an authenticated WebSocket reverse proxy, as described in the deployment guide.
 ## Images and source
 
 Repository: [power12317/codex-server](https://github.com/power12317/codex-server).
-The main-branch workflow publishes `ghcr.io/power12317/codex-server:main` and
-`:latest` after native amd64/arm64 builds and startup checks succeed. A workflow
+The main-branch workflow publishes `ghcr.io/power12317/codex-server:latest`
+after native amd64/arm64 builds and startup checks succeed. A workflow
 trigger alone does not confirm publication. See the
 [deployment guide](deploy/cpa-runtime/README.md) for migration from the previous
 `codex-cpa-runtime` image name and building locally.

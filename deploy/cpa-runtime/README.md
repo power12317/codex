@@ -1,6 +1,6 @@
 # Codex Server deployment
 
-Pushes to main publish `ghcr.io/power12317/codex-server:main` and `:latest`.
+Pushes to main publish `ghcr.io/power12317/codex-server:latest`.
 Use the service standalone or alongside CPA; a source checkout is not required
 on a deployment host. The `deploy/cpa-runtime` directory name and compatibility
 settings are retained so existing build scripts continue to work.
@@ -127,7 +127,7 @@ See the [third-party API](../../docs/codex-server-api.md), [v3 contract](../../c
 Pushes to `main` run `.github/workflows/cpa-runtime-image.yml`.
 The workflow builds on native Ubuntu amd64 and arm64 runners and checks `/readyz`
 on each architecture before publishing a multiarch manifest under
-`ghcr.io/power12317/codex-server:main` and `:latest`. Native images are
+`ghcr.io/power12317/codex-server:latest`. Native images are
 transferred between jobs by digest, without architecture or SHA image tags.
 The source revision and image digests are recorded in the Actions summary.
 A triggered workflow is not evidence of a successful publication. GHCR package
@@ -153,7 +153,7 @@ client-authorization check; exposed clients can invoke the service's control API
 ## Image-name migration and local builds
 
 The repository is now `power12317/codex-server`, and new main-branch publications
-use `ghcr.io/power12317/codex-server:main` and `:latest`. The previous
+use `ghcr.io/power12317/codex-server:latest`. The previous
 `ghcr.io/power12317/codex-cpa-runtime` package is a separate registry path; it is
 not renamed automatically and this workflow no longer updates its tags. Wait for
 the new package to publish successfully, then change only the Compose image

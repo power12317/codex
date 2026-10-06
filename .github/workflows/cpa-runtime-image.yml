@@ -129,11 +129,9 @@ jobs:
             sources+=("${IMAGE_NAME}@sha256:${digest}")
           done
           docker buildx imagetools create \
-            --tag "${IMAGE_NAME}:main" \
             --tag "${IMAGE_NAME}:latest" \
             "${sources[@]}"
           echo '### Published multiarch Codex Server' >> "$GITHUB_STEP_SUMMARY"
           echo '```text' >> "$GITHUB_STEP_SUMMARY"
-          docker buildx imagetools inspect "${IMAGE_NAME}:main" | tee -a "$GITHUB_STEP_SUMMARY"
           docker buildx imagetools inspect "${IMAGE_NAME}:latest" | tee -a "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
