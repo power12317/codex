@@ -1,0 +1,10 @@
+# Overlay for CPA's docker-compose.codex.yml. The service name must match its base file.
+services:
+  codex-server:
+    volumes:
+      - type: bind
+        source: /etc/localtime
+        target: /etc/localtime
+        read_only: true
+        bind:
+          create_host_path: false

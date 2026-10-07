@@ -1,5 +1,40 @@
 # Codex Server inference validation record
 
+## 2026-10-07 replace-only time context and host timezone mounts
+
+Baseline: `4ca102b7b`. Inspection of the reported request showed 1,270 incoming
+items and 1,271 outgoing items: the current user/developer time declarations
+preceded tool continuations, so the previous adapter skipped them and appended
+another user context. The regression fixture preserves that ordering and item
+count using synthetic content; no production request log or credentials are
+included in the repository.
+
+- Time-context unit tests: **5/5 passed**. The latest declaration of each kind
+  is replaced in place across tool continuations, older declarations and paths
+  stay intact, repeated normalization is idempotent, and absent fields/blocks
+  are never added.
+- CPA unit and real-process integration suite: **50/50 passed**. The three new
+  UTC/Singapore/Tokyo subprocess cases compare actual HTTP request bodies with
+  IPC diagnostics, verify both current time declarations, preserve tool-result
+  position/count, and verify that ordinary text gets no synthetic time message.
+- Local Docker checks passed for UTC, Singapore and Tokyo tzfile mounts with
+  `TZ` unset, both with and without a name-file mount. The image's UTC database
+  remains unchanged. These checks used the cached Debian runtime with the new
+  regular-file `/etc/localtime` layout; full new Linux images are validated on
+  both architectures by the publication workflow.
+- Strict Clippy passed for the core and app-server production libraries with
+  `-D warnings`. Rust formatting, changed Markdown/YAML formatting, documentation
+  links and `git diff --check` passed.
+- Shellcheck, actionlint, standalone Compose validation and composition of the
+  timezone overlay with CPA's existing Compose file passed. CPA files were read
+  for validation and were not edited.
+
+The standard Compose file and CPA overlay now supply the host tzfile mount.
+Existing containers must be recreated with that mount; an image alone cannot
+read the host's unmounted timezone configuration. The publication image name and
+`latest` tag policy, native identities, User-Agent and protocol fields remain
+unchanged. Documentation remains in English.
+
 ## 2026-10-07 exchange-local gateway node reporting
 
 Baseline: `d9470b49e`. Response `oaiLbNode` now prefers an explicit response

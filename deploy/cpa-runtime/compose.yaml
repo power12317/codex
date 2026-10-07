@@ -1,0 +1,15 @@
+# Standalone Linux deployment. Relative data paths use the Compose project directory.
+services:
+  codex-server:
+    image: ghcr.io/power12317/codex-server:latest
+    network_mode: host
+    volumes:
+      - ./auths:/cpa-auth
+      - ./codex-data:/var/lib/codex
+      - type: bind
+        source: /etc/localtime
+        target: /etc/localtime
+        read_only: true
+        bind:
+          create_host_path: false
+    restart: unless-stopped

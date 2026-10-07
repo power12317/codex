@@ -23,9 +23,14 @@ LABEL org.opencontainers.image.title="Codex Server" \
     org.opencontainers.image.source="https://github.com/power12317/codex-server" \
     io.codex.cpa.protocol-version="3" \
     io.codex.cpa.execution-mode="inference-only"
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates libssl3 libasound2 libudev1 libcap2 git ripgrep bash \
+# Keep /etc/localtime a regular bind-mount target. Following Debian's default
+# symlink would mount host data over the image's Etc/UTC zoneinfo file instead.
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    tzdata ca-certificates libssl3 libasound2 libudev1 libcap2 git ripgrep bash \
     && rm -rf /var/lib/apt/lists/* \
+    && cp /etc/localtime /tmp/codex-localtime \
+    && rm /etc/localtime \
+    && mv /tmp/codex-localtime /etc/localtime \
     && useradd --uid 10001 --create-home codex \
     && install -d -o codex -g codex -m 0700 /var/lib/codex /run/codex
 COPY --from=build /out/ /usr/local/bin/

@@ -24,7 +24,9 @@ sudo chown 10001:10001 auths codex-data
 chmod 700 auths codex-data
 ```
 
-Use this `compose.yaml` on a Linux host:
+Use the supplied [compose.yaml](compose.yaml), or this equivalent configuration,
+on a Linux host. Place it in the deployment directory containing `auths` and
+`codex-data`:
 
 ```yaml
 services:
@@ -34,6 +36,12 @@ services:
     volumes:
       - ./auths:/cpa-auth
       - ./codex-data:/var/lib/codex
+      - type: bind
+        source: /etc/localtime
+        target: /etc/localtime
+        read_only: true
+        bind:
+          create_host_path: false
     restart: unless-stopped
 ```
 
@@ -66,6 +74,12 @@ services:
     volumes:
       - ./auths:/cpa-auth
       - ./codex-data:/var/lib/codex
+      - type: bind
+        source: /etc/localtime
+        target: /etc/localtime
+        read_only: true
+        bind:
+          create_host_path: false
     restart: unless-stopped
 ```
 
@@ -176,15 +190,59 @@ credential filenames, state locations and protocol v3 identifiers are unchanged.
 
 ## Runtime timezone
 
-The image does not select a timezone from a user's nationality, language, or
-location. The published Debian runtime defaults to `Etc/UTC`. CPA is a separate
-container; its timezone does not set the Codex worker timezone. To follow the
-deployment host, pass its timezone configuration at deployment (for example,
-read-only `/etc/localtime` and `/etc/timezone` mounts on hosts that provide both
-files), without a conflicting `TZ` override. Docker does not inherit this
-configuration automatically. No regional timezone is hardcoded in this image.
+The supplied Compose configurations bind the deployment host's `/etc/localtime`
+read-only into the container. With no `TZ` override, the container and its workers
+therefore use the host's timezone rules, including date rollover and daylight
+saving changes. No country or language determines a default.
 
-Verify the running container with `date '+%Z %z'`, `printenv TZ`,
-`readlink /etc/localtime` and `cat /etc/timezone`. The inference adapter uses the
-worker's effective local date/timezone for the current time context; it does not
-replace historical dates, caller paths or caller OS descriptions.
+A Docker image cannot discover an unmounted host timezone. Pulling a new image
+or restarting an existing container does not add a mount. Existing deployments
+must add the mount and recreate the container. For CPA's current
+`docker-compose.codex.yml`, the supplied
+[compose.cpa-timezone.yaml](compose.cpa-timezone.yaml) overlay adds it without
+changing credentials, data paths, image references or networking. Run from the
+CPA deployment directory, substituting the overlay's actual path:
+
+```sh
+docker compose -f docker-compose.codex.yml \
+  -f /path/to/codex-server/deploy/cpa-runtime/compose.cpa-timezone.yaml \
+  up -d --force-recreate codex-server
+```
+
+Keep using both files for subsequent Compose operations, or copy the time mount
+into the existing service configuration. The overlay targets the `codex-server`
+service; use the existing service name if a deployment calls it something else.
+The bind source is resolved on the Docker daemon host. The standalone example
+assumes Linux; Docker Desktop has its own VM and file-sharing behavior.
+
+`/etc/localtime` is a regular file in the image, so a bind mount cannot replace
+the image's `Etc/UTC` zoneinfo file through Debian's default symlink. The image
+includes `tzdata` for explicit IANA `TZ` settings and native timezone lookup.
+An explicit `TZ` takes precedence over the mounted file; remove a conflicting
+`TZ` to follow the host. An unconfigured container with no mount retains UTC.
+
+On hosts that also provide `/etc/timezone`, it can additionally be mounted
+read-only to preserve the IANA name. This file is optional because not every
+Linux distribution has it. If only `/etc/localtime` is mounted and the image's
+name file is stale, the request adapter reports the actual offset, such as
+`UTC+09:00`, rather than an incorrect `Etc/UTC` name. This is the host's effective
+offset, not UTC+00:00.
+
+Compare the effective offset on the deployment host and in the container:
+
+```sh
+date '+%Y-%m-%d %H:%M:%S %Z %z'
+docker compose exec codex-server date '+%Y-%m-%d %H:%M:%S %Z %z'
+docker inspect codex-server --format '{{json .Mounts}}'
+```
+
+The request adapter replaces existing date/timezone fields in the latest
+`environment_context` and `codex_apps_client_time_context` declarations, including
+when later items are tool calls/results. It does not append messages or add
+missing time fields. Older declarations, paths, OS descriptions and tool payloads
+remain intact.
+
+The image workflow runs [check-timezone.sh](check-timezone.sh) against both native
+architectures before publication. It verifies UTC, Singapore and Tokyo tzfile
+mounts with `TZ` unset, and confirms the image's UTC database stays unchanged.
+These are test fixtures, not deployment defaults.

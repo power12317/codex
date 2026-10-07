@@ -203,11 +203,11 @@ projection does not rename tools or translate call IDs.
 Current date and timezone are read from the worker's actual system clock and
 runtime timezone configuration, with no country or language based default. An
 unavailable IANA zone name is represented using the actual UTC offset. Only
-standalone current `environment_context` / `codex_apps_client_time_context` text
-blocks after the last assistant message or non-message history item are rewritten;
-earlier history, quoted
-examples, code fences, paths and OS declarations remain unchanged. A missing
-current block is supplied as a small standalone message. Flat caller metadata
+the latest standalone declaration of each kind (`environment_context` and
+`codex_apps_client_time_context`) is rewritten in place, even when assistant or
+tool items follow it. Older declarations, quoted examples, code fences, paths,
+OS declarations and tool payloads remain unchanged. Missing blocks and fields
+stay missing: no synthetic message or date/timezone field is appended. Flat caller metadata
 date/timezone fields are updated consistently; top-level date/timezone parameters
 are consumed instead of being sent as unknown Responses parameters.
 

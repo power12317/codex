@@ -66,9 +66,7 @@ pub async fn prepare_inference_request(
         }
     }
     let time = super::inference_context::TimeContext::now();
-    if !time.apply(input_items) {
-        input_items.push(time.message());
-    }
+    time.apply(input_items);
     let mut input: Vec<ResponseItem> = serde_json::from_value(input)?;
     for item in &mut input {
         if let Some(prefix) = item.id_prefix()

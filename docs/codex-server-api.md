@@ -224,6 +224,20 @@ business `metadata` and opaque `turn_state` are not rewritten. See the
 [identity contract](../codex-rs/app-server/docs/cpa-bridge-v3.md#response-identity-projection)
 for supported locations and aliases.
 
+### Runtime date and timezone
+
+The adapter replaces existing date/timezone fields in the latest standalone
+`environment_context` and `codex_apps_client_time_context` declarations in input
+messages. These declarations remain current across assistant/tool continuations;
+they do not need to be repeated after each tool result. Older declarations and
+other message/tool content remain intact. No context message or missing time
+field is added. Supplied flat date/timezone metadata is updated consistently.
+
+Values come from the worker's effective system clock and timezone. Use the
+[host timezone mount](../deploy/cpa-runtime/README.md#runtime-timezone) to follow
+the deployment host; a container does not inherit unmounted host files merely
+because its image was rebuilt.
+
 ## Streaming and completion
 
 The start reply indicates that upstream response headers have been accepted:

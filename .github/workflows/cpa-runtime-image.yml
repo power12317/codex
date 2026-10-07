@@ -73,6 +73,10 @@ jobs:
             sleep 1
           done
           exit 1
+      - name: Verify host timezone mounts
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: deploy/cpa-runtime/check-timezone.sh "ghcr.io/power12317/codex-server@${IMAGE_DIGEST}"
       - name: Export the verified image digest
         env:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}

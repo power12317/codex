@@ -9,6 +9,8 @@ mod home_tests;
 mod oailb_tests;
 #[path = "cpa_bridge/parser_tests.rs"]
 mod parser_tests;
+#[path = "cpa_bridge/time_context_tests.rs"]
+mod time_context_tests;
 
 use anyhow::Result;
 use app_test_support::ChatGptIdTokenClaims;

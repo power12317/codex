@@ -61,43 +61,42 @@ impl TimeContext {
         }
     }
 
-    pub(super) fn apply(&self, input: &mut [Value]) -> bool {
-        let current_start = input
-            .iter()
-            .rposition(|item| item["role"] == "assistant" || item["type"] != "message")
-            .map_or(0, |index| index + 1);
-        let mut found = false;
-        for item in &mut input[current_start..] {
+    pub(super) fn apply(&self, input: &mut [Value]) {
+        // A declaration stays current across assistant/tool continuations until a newer
+        // declaration of the same kind replaces it. Never append a synthetic user message.
+        let mut seen = [false; 2];
+        for item in input.iter_mut().rev() {
             if !matches!(item["role"].as_str(), Some("user" | "developer" | "system")) {
                 continue;
             }
             if let Some(content) = item["content"].as_array_mut() {
-                for part in content {
-                    if part["type"] == "input_text"
-                        && let Some(text) = part["text"].as_str()
-                        && let Some(updated) = self.rewrite_block(text)
+                for part in content.iter_mut().rev() {
+                    if part["type"] != "input_text" {
+                        continue;
+                    }
+                    for (index, tag) in ["environment_context", "codex_apps_client_time_context"]
+                        .into_iter()
+                        .enumerate()
                     {
-                        part["text"] = Value::String(updated);
-                        found = true;
+                        if !seen[index]
+                            && let Some(text) = part["text"].as_str()
+                            && let Some(updated) = self.rewrite_block(text, tag)
+                        {
+                            part["text"] = Value::String(updated);
+                            seen[index] = true;
+                        }
                     }
                 }
             }
         }
-        found
     }
 
-    fn rewrite_block(&self, text: &str) -> Option<String> {
+    fn rewrite_block(&self, text: &str, tag: &str) -> Option<String> {
         let trimmed = text.trim();
-        let tag = ["environment_context", "codex_apps_client_time_context"]
-            .into_iter()
-            .find(|tag| {
-                trimmed.starts_with(&format!("<{tag}>")) && trimmed.ends_with(&format!("</{tag}>"))
-            })?;
         let opening = format!("<{tag}>");
         let closing = format!("</{tag}>");
         let inner = trimmed.strip_prefix(&opening)?.strip_suffix(&closing)?;
-        // Only standalone context blocks are owned by this adapter. Never rewrite quoted
-        // examples, code fences, or an arbitrary user prompt containing matching text.
+        // Only standalone protocol contexts are owned here, not quoted examples or code.
         if inner.contains("```") || inner.contains("~~~") || inner.contains(&opening) {
             return None;
         }
@@ -107,23 +106,20 @@ impl TimeContext {
             let close = format!("</{field}>");
             if let Some(start) = inner.find(&open) {
                 let end = start + open.len() + inner[start + open.len()..].find(&close)?;
-                // Do not change nested paths, descriptions or repeated ambiguous declarations.
                 if inner[end + close.len()..].contains(&open) {
                     return None;
                 }
                 inner.replace_range(start + open.len()..end, value);
-            } else {
-                inner.push_str(&format!("\n  <{field}>{value}</{field}>\n"));
             }
+            // A missing field stays missing; replacement never inserts context content.
         }
-        Some(format!("{opening}{inner}{closing}"))
-    }
-
-    pub(super) fn message(&self) -> Value {
-        json!({"type":"message", "role":"user", "content":[{"type":"input_text", "text":format!(
-            "<environment_context>\n  <current_date>{}</current_date>\n  <timezone>{}</timezone>\n</environment_context>",
-            self.date, self.timezone
-        )}]})
+        let start = text.len() - text.trim_start().len();
+        let end = text.trim_end().len();
+        Some(format!(
+            "{}{opening}{inner}{closing}{}",
+            &text[..start],
+            &text[end..]
+        ))
     }
 
     pub(super) fn metadata(&self, body: &mut Value, request: &Map<String, Value>) {
