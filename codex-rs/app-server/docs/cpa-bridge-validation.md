@@ -419,6 +419,69 @@ accepts a request, no model retry or agent continuation occurs. Transport retry
 configuration is zero because the upstream `max_attempts` field counts additional
 attempts after the initial request.
 
+## 2026-10-07 official main merge
+
+Merged official `openai/codex` main at
+`5b0b2530354052b9194156d70d4c94a439368342` ("Stabilize Guardian snapshot
+prefixes by separating assistant context", #51627), incorporating 102 upstream
+commits after the previous merge baseline. The fork parent is
+`0ce49f5ac55bd644e9a9e4bb5d185c74ab6ea4b8`. Both histories are retained.
+
+The five Git conflicts were resolved after maintainer confirmation. The
+app-server README retains the service introduction and the new upstream thread
+list documentation. Code Mode retains upstream ranked tool search, including its
+feature gate, and the fork's hosted `ImageGeneration` exclusions. Both compressed
+protocol export bundles were regenerated from the combined Rust definitions via
+`just write-app-server-schema` and its `--experimental` variant. The new tool
+search identity match also handles the fork's `ImageGeneration` variant.
+
+Two upstream Guardian compilation issues required small compatibility repairs:
+new retained-assistant code now wraps and matches `ContentItem` through the
+existing `SectionContent` type, and the cache-prefix integration test uses the
+current `prepare_transcript` API. Both affected files were identical to the pinned
+official commit before these repairs. Guardian's 47 selected tests, including
+both public cache-prefix integration tests, pass with the repairs.
+
+Upstream now represents base instructions as a developer input message for both
+Responses and Responses Lite. CPA tests assert the preserved instruction text and
+role in that native representation. Eight log-event test calls now explicitly
+pass the same 10-second timeout that the previous helper supplied internally.
+All 60 fork-added files remain present.
+
+Validation on the macOS arm64 development host with Rust 1.95.0:
+
+- Selected Rust regressions: **1,062 passed in total**. The first nextest run
+  passed 1,018 tests; 44 MCP integration tests failed without their supporting
+  executables. After building `test_stdio_server` and `codex`, an exact-name retry
+  passed all 44 without further source changes. Coverage includes all selected
+  CPA tests (52), app-server protocol tests (320), Guardian tests (47), tools
+  tests (110), login tests (243), and native client, tool-plan, MCP, SSE and
+  prepared-request byte tests. This is not a full workspace test run.
+- `cargo build --locked -p codex-rmcp-client --bin test_stdio_server -p codex-cli
+  --bin codex` passed. The nextest build also compiled the app-server executable
+  and all selected test targets.
+- Stable and experimental protocol generation passed; stable generation also
+  refreshed the Python SDK artifacts. Protocol export consistency tests pass.
+- GitHub script tests: **80 passed**, run with the required `packaging` Python
+  dependency available.
+- Python SDK artifact workflow tests: **80 passed, 1 pre-existing failure** in
+  `test_root_format_driver_covers_all_formatter_groups`. The test expects direct
+  `rustfmt` commands while `scripts/format.py` emits `cargo fmt`. Both files are
+  byte-identical in the fork parent and pinned official commit. Running the exact
+  test against copies of the fork parent's files reproduces the same failure.
+  The assertion and formatter were not changed as part of this merge.
+- Formatting checks pass for all eight manually edited Rust files. The staged
+  non-snapshot diff passes `git diff --check`. Whitespace warnings are limited to
+  14 upstream TUI snapshots, each byte-identical to the official input.
+
+Local logs are `/tmp/codex-server-sync-rust-tests.log`,
+`/tmp/codex-server-sync-rust-retry.log`,
+`/tmp/codex-server-sync-test-fixtures-build.log`,
+`/tmp/codex-server-sync-github-tests.log`,
+`/tmp/codex-server-sync-python-tests.log`, and
+`/tmp/codex-server-sync-python-baseline.log`. Linux image validation remains the
+responsibility of the existing GitHub Actions image workflow.
+
 ## 2026-10-04 official main merge
 
 Fetched the official `https://github.com/openai/codex.git` default branch `main`

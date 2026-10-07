@@ -195,12 +195,14 @@ async fn cpa_source_turn_continuity_isolation_and_default_stderr() -> Result<()>
         ),
         (json!(["left-state"]), json!(["right-state"]))
     );
-    let started = runtime.wait_for_json_log_event("cpa.request.start").await?;
+    let started = runtime
+        .wait_for_json_log_event("cpa.request.start", Duration::from_secs(/*secs*/ 10))
+        .await?;
     let completed = runtime
-        .wait_for_json_log_event("cpa.request.completed")
+        .wait_for_json_log_event("cpa.request.completed", Duration::from_secs(/*secs*/ 10))
         .await?;
     let worker = runtime
-        .wait_for_json_log_event("cpa.worker.started")
+        .wait_for_json_log_event("cpa.worker.started", Duration::from_secs(/*secs*/ 10))
         .await?;
     assert_eq!(
         (
@@ -290,10 +292,12 @@ async fn cpa_failure_logs_are_visible_without_rust_log() -> Result<()> {
         json!(["[REDACTED]"])
     );
     receive(&mut ws, "id", json!(2)).await?;
-    let error = runtime.wait_for_json_log_event("cpa.request.error").await?;
+    let error = runtime
+        .wait_for_json_log_event("cpa.request.error", Duration::from_secs(/*secs*/ 10))
+        .await?;
     assert_eq!(error["fields"]["rpcRequestId"], json!("r"));
     let logged = runtime
-        .wait_for_json_log_event("cpa.request.upstream")
+        .wait_for_json_log_event("cpa.request.upstream", Duration::from_secs(/*secs*/ 10))
         .await?;
     assert_eq!(
         logged["fields"]["details"]["headers"]["authorization"],
@@ -301,7 +305,10 @@ async fn cpa_failure_logs_are_visible_without_rust_log() -> Result<()> {
     );
     assert!(!logged.to_string().contains("fake-cpa-access"));
     let response = runtime
-        .wait_for_json_log_event("cpa.request.upstream.response")
+        .wait_for_json_log_event(
+            "cpa.request.upstream.response",
+            Duration::from_secs(/*secs*/ 10),
+        )
         .await?;
     assert_eq!(
         response["fields"]["details"]["error"],
@@ -331,8 +338,12 @@ async fn cpa_validation_failure_has_start_and_error_logs() -> Result<()> {
         receive(&mut ws, "id", json!(2)).await?["error"]["data"]["httpStatus"],
         json!(400)
     );
-    runtime.wait_for_json_log_event("cpa.request.start").await?;
-    let error = runtime.wait_for_json_log_event("cpa.request.error").await?;
+    runtime
+        .wait_for_json_log_event("cpa.request.start", Duration::from_secs(/*secs*/ 10))
+        .await?;
+    let error = runtime
+        .wait_for_json_log_event("cpa.request.error", Duration::from_secs(/*secs*/ 10))
+        .await?;
     assert_eq!(
         error["fields"]["details"],
         json!({"error":"stream=true is required", "httpStatus":400})

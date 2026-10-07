@@ -52,12 +52,16 @@ async fn cpa_hosted_tools_use_native_request_construction(lite: bool) -> Result<
             assert!(body.get("tools").is_none());
             assert_eq!(input[0]["type"], json!("additional_tools"));
             assert_eq!(input[0]["tools"], expected_tools);
-            assert_eq!(input[1]["role"], json!("developer"));
-            assert_eq!(input[1]["content"][0]["text"], json!("native instructions"));
         } else {
             assert_eq!(body["tools"], expected_tools);
-            assert_eq!(body["instructions"], json!("native instructions"));
         }
+        assert!(body.get("instructions").is_none());
+        let instructions = &input[usize::from(lite)];
+        assert_eq!(instructions["role"], json!("developer"));
+        assert_eq!(
+            instructions["content"][0]["text"],
+            json!("native instructions")
+        );
         let call = input.last().expect("historical call");
         assert_eq!(call["id"], json!("fc_old"));
         assert_eq!(call["call_id"], json!("call_unchanged"));

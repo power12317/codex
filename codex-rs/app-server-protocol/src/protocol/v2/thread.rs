@@ -1398,6 +1398,11 @@ pub struct ThreadListParams {
     /// Optional page size; defaults to a reasonable server-side value.
     #[ts(optional = nullable)]
     pub limit: Option<u32>,
+    /// Thread IDs to exclude before applying the result limit. Up to 100
+    /// entries; invalid IDs or a larger list are rejected, never truncated.
+    /// Send the same exclusions on each page. Omitted, null, or empty means no exclusions.
+    #[ts(optional = nullable)]
+    pub excluded_thread_ids: Option<Vec<String>>,
     /// Optional sort key; defaults to created_at.
     #[ts(optional = nullable)]
     pub sort_key: Option<ThreadSortKey>,
@@ -1589,8 +1594,8 @@ pub struct ThreadSearchResponse {
 #[ts(export_to = "v2/")]
 pub struct ThreadSearchOccurrencesParams {
     pub thread_id: String,
-    /// Case-insensitive literal substring to find in visible user messages and final assistant
-    /// messages.
+    /// Case-insensitive literal substring to find in visible user messages and both partial and
+    /// final assistant answers.
     pub search_term: String,
     /// Opaque cursor returned by a previous call for the same thread and search term.
     #[ts(optional = nullable)]

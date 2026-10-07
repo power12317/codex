@@ -846,7 +846,11 @@ async fn lookup_latest_session_target_with_app_server(
                 include_non_interactive,
                 lookup_mode,
             ))
-            .await?;
+            .await;
+        let response = match response {
+            Err(_) if lookup_mode == LatestSessionLookupMode::StateDbOnly => continue,
+            response => response?,
+        };
         let target = response
             .data
             .into_iter()
@@ -875,6 +879,7 @@ fn latest_session_lookup_params(
     lookup_mode: LatestSessionLookupMode,
 ) -> ThreadListParams {
     ThreadListParams {
+        excluded_thread_ids: None,
         originators: None,
         cursor: None,
         limit: Some(1),

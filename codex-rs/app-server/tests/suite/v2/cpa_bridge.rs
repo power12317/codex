@@ -223,7 +223,12 @@ async fn cpa_lossless_single_inference_and_identity_contract() -> Result<()> {
         receive(&mut ws, "method", json!("cpa/inference/upstream")).await?["params"].clone();
     assert_eq!(logged_request["kind"], json!("request"));
     let prepared: Value = serde_json::from_str(logged_request["body"].as_str().unwrap())?;
-    assert_eq!(prepared["instructions"], request["instructions"]);
+    assert!(prepared.get("instructions").is_none());
+    assert_eq!(prepared["input"][0]["role"], json!("developer"));
+    assert_eq!(
+        prepared["input"][0]["content"][0]["text"],
+        request["instructions"]
+    );
     assert_eq!(prepared["tool_choice"], request["tool_choice"]);
     assert_eq!(prepared["future_extension"], request["future_extension"]);
     assert_eq!(prepared["store"], json!(false));
