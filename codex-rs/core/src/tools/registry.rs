@@ -471,7 +471,8 @@ impl ToolRegistry {
                 ToolSpec::Function(_)
                 | ToolSpec::Freeform(_)
                 | ToolSpec::ToolSearch { .. }
-                | ToolSpec::WebSearch { .. } => "",
+                | ToolSpec::WebSearch { .. }
+                | ToolSpec::ImageGeneration { .. } => "",
             };
             if !description.trim().is_empty() {
                 *existing_description = description.to_string();

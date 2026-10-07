@@ -223,7 +223,9 @@ fn code_mode_tool_definitions_for_spec(
                 }
             })
             .collect(),
-        ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => Vec::new(),
+        ToolSpec::ToolSearch { .. }
+        | ToolSpec::WebSearch { .. }
+        | ToolSpec::ImageGeneration { .. } => Vec::new(),
     }
 }
 

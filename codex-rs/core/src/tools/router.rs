@@ -190,7 +190,9 @@ impl ToolRouter {
                             ResponsesApiNamespaceTool::Custom(tool) => tool.name == name.name,
                         })
                 }
-                ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => false,
+                ToolSpec::ToolSearch { .. }
+                | ToolSpec::WebSearch { .. }
+                | ToolSpec::ImageGeneration { .. } => false,
             })
         {
             return true;

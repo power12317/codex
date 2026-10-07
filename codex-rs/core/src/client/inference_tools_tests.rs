@@ -52,3 +52,22 @@ fn built_in_search_choice_needs_no_function_name() {
     let parsed = InferenceTools::parse(request.as_object().unwrap()).unwrap();
     assert_eq!(parsed.choice, Some(json!({"type":"web_search"})));
 }
+
+#[test]
+fn hosted_image_generation_and_tool_search_use_native_serialization() {
+    let request = json!({"tools":[
+        {"type":"image_generation","output_format":"png","future_option":{"explicit":false}},
+        {"type":"tool_search","execution":"client","description":"Search tools","parameters":{"type":"object"}}
+    ],"tool_choice":{"type":"image_generation"}});
+    let parsed =
+        InferenceTools::parse(request.as_object().expect("request")).expect("native tools");
+    assert_eq!(
+        serde_json::to_value(&parsed.native).expect("serialize"),
+        request["tools"]
+    );
+    assert_eq!(
+        codex_tools::create_tools_json_for_responses_lite(&parsed.native).expect("lite tools"),
+        request["tools"].as_array().expect("tools").clone()
+    );
+    assert_eq!(parsed.choice, Some(json!({"type":"image_generation"})));
+}

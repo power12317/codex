@@ -30,6 +30,13 @@ pub enum ToolSpec {
         description: String,
         parameters: JsonSchema,
     },
+    /// Hosted Responses image generation. Options belong to the upstream image
+    /// service; declaring this tool never registers a local tool executor.
+    #[serde(rename = "image_generation")]
+    ImageGeneration {
+        #[serde(flatten)]
+        options: serde_json::Map<String, Value>,
+    },
     // TODO: Understand why we get an error on web_search although the API docs
     // say it's supported.
     // https://platform.openai.com/docs/guides/tools-web-search?api-mode=responses#:~:text=%7B%20type%3A%20%22web_search%22%20%7D%2C
@@ -62,6 +69,7 @@ impl ToolSpec {
             ToolSpec::Namespace(namespace) => namespace.name.as_str(),
             ToolSpec::ToolSearch { .. } => "tool_search",
             ToolSpec::WebSearch { .. } => "web_search",
+            ToolSpec::ImageGeneration { .. } => "image_generation",
             ToolSpec::Freeform(tool) => tool.name.as_str(),
         }
     }

@@ -1,5 +1,38 @@
 # Codex Server inference validation record
 
+## 2026-10-07 native hosted-tool compatibility
+
+Baseline: `3628694b0`. The inference tool parser now accepts hosted
+`image_generation` and native `tool_search` declarations, including forced tool
+selection. Hosted image options are serialized by `ToolSpec`; they do not
+register local tool execution. The v3 request envelope, native inference builder,
+identity handling and replace-only time processing are unchanged.
+
+- CPA unit and real-process integration suite: **52/52 passed** with
+  `just test -p codex-app-server --lib --test all cpa_`.
+- Protocol/tools library tests and selected core inference/client tests:
+  **472/472 passed**. Stable and experimental schema fixtures match the original
+  protocol definitions.
+- New Responses and Lite cases compare actual HTTP bodies with IPC diagnostics,
+  preserve hosted image options, apply native tool-search defaults, normalize
+  historical item IDs, rebuild the cache identity and construct the native Lite
+  tool/instruction prefix. Each case sends two requests and observes exactly two
+  upstream model POSTs.
+- Existing UTC/Singapore/Tokyo regressions still replace time fields in place
+  across tool continuations and never append a synthetic time message.
+- Strict Clippy passed for the core and tools production libraries with
+  `-D warnings`. Scoped Rust formatting, documentation links/JSON examples and
+  `git diff --check` passed.
+
+Tests use local mock HTTP services and fake credentials. The rebuilt
+`codex-rs/target/debug/codex-app-server` is a macOS arm64 development artifact;
+these tests do not exercise a live model account. Deployment configuration is
+unchanged. The existing main-branch workflow builds native amd64/arm64 images,
+verifies startup and host timezone mounts, and publishes
+`ghcr.io/power12317/codex-server:latest`. The workflow and deployment guide remain
+unchanged. Image build completion is tracked by GitHub Actions separately from
+the local test results above.
+
 ## 2026-10-07 replace-only time context and host timezone mounts
 
 Baseline: `4ca102b7b`. Inspection of the reported request showed 1,270 incoming

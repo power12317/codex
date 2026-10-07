@@ -191,12 +191,14 @@ Pass all required history in `request.input`. `previous_response_id`,
 and `background` must be exactly `false`. Nonstreaming requests are rejected;
 a client needing a final JSON result can collect and parse the SSE stream itself.
 
-Supported tools include native `function`, `custom`, `namespace` and
-`web_search`, with the detailed field policy in the
+Supported tools include native `function`, `custom`, `namespace`, `web_search`,
+`tool_search` and hosted `image_generation`, with the detailed field policy in the
 [v3 contract](../codex-rs/app-server/docs/cpa-bridge-v3.md#native-request-mapping).
 Client-side function/custom tools execute in the calling application. Preserve
 their call IDs and send results plus required history in subsequent requests.
-There is no local tool loop. Native web search runs at the upstream service.
+There is no local tool loop. Native web search and image generation run at the
+upstream service. Tool search retains its declared client/server execution mode;
+the worker does not execute client tools.
 
 ### Session, thread and turn identities
 

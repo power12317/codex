@@ -5,6 +5,8 @@ mod continuity_tests;
 mod hierarchy_tests;
 #[path = "cpa_bridge/home_tests.rs"]
 mod home_tests;
+#[path = "cpa_bridge/hosted_tools_tests.rs"]
+mod hosted_tools_tests;
 #[path = "cpa_bridge/oailb_tests.rs"]
 mod oailb_tests;
 #[path = "cpa_bridge/parser_tests.rs"]

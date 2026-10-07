@@ -185,7 +185,11 @@ The child uses the retained native model catalog, `ModelClient` prompt/request
 builder, and request options. Tool parsing has one owner in the core CPA adapter;
 the IPC envelope validator does not maintain a second tool-type allowlist.
 Supported tools are native `function`, `custom`, `namespace` (function/custom
-children), and `web_search`. Search runs upstream, not in the worker. The parser
+children), `web_search`, `tool_search` and hosted `image_generation`. Web search
+and image generation run upstream. Image options such as `output_format` are
+carried by the native tool specification. Tool search retains its declared
+client/server execution mode; omission uses the native server mode. No local
+image executor or client-tool execution is added. The parser
 preserves namespace/name/description, grammar, supported JSON Schema constraints
 including `encrypted`, `strict`, `defer_loading`, and explicit search booleans and
 content types. Chat-style nested function definitions and `input_schema` tool

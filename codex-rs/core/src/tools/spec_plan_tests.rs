@@ -111,6 +111,7 @@ impl ToolPlanProbe {
                 ToolSpec::Function(_)
                 | ToolSpec::ToolSearch { .. }
                 | ToolSpec::WebSearch { .. }
+                | ToolSpec::ImageGeneration { .. }
                 | ToolSpec::Freeform(_) => None,
             })
             .collect::<BTreeMap<_, _>>();

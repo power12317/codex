@@ -462,7 +462,7 @@ pub(crate) fn finalize_tool_router(
                     ToolSpec::Namespace(namespace) => namespace.name.as_str(),
                     ToolSpec::Function(_) | ToolSpec::Freeform(_) => DEFAULT_FUNCTION_NAMESPACE,
                     ToolSpec::ToolSearch { .. } => TOOL_SEARCH_TOOL_NAME,
-                    ToolSpec::WebSearch { .. } => continue,
+                    ToolSpec::WebSearch { .. } | ToolSpec::ImageGeneration { .. } => continue,
                 };
                 let owner = tool.runtime.mcp_server_name();
                 match namespace_owners.get(namespace_name) {
@@ -892,7 +892,10 @@ fn register_code_mode_executors(
             ToolSpec::Namespace(namespace) if !namespace.tools.is_empty() => {
                 codex_tools::code_mode_name_for_tool_name(&tool_name)
             }
-            ToolSpec::Namespace(_) | ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => {
+            ToolSpec::Namespace(_)
+            | ToolSpec::ToolSearch { .. }
+            | ToolSpec::WebSearch { .. }
+            | ToolSpec::ImageGeneration { .. } => {
                 continue;
             }
         };

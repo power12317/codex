@@ -43,7 +43,9 @@ impl ToolSearchInfo {
                 entry: ToolSearchEntry { search_text, spec },
                 source_info,
             }),
-            ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => None,
+            ToolSpec::ToolSearch { .. }
+            | ToolSpec::WebSearch { .. }
+            | ToolSpec::ImageGeneration { .. } => None,
         }
     }
 
@@ -86,7 +88,9 @@ fn normalize_search_spec(spec: ToolSpec) -> Option<LoadableToolSpec> {
             tools: vec![ResponsesApiNamespaceTool::Custom(tool)],
         },
         ToolSpec::Namespace(namespace) => namespace,
-        ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => {
+        ToolSpec::ToolSearch { .. }
+        | ToolSpec::WebSearch { .. }
+        | ToolSpec::ImageGeneration { .. } => {
             return None;
         }
     };
@@ -136,6 +140,7 @@ fn default_tool_search_text(spec: &ToolSpec) -> String {
         ToolSpec::WebSearch { .. } => {
             push_search_part(&mut parts, "web search".to_string());
         }
+        ToolSpec::ImageGeneration { .. } => {}
         ToolSpec::Freeform(tool) => {
             push_search_part(&mut parts, tool.name.clone());
             push_search_part(&mut parts, tool.description.clone());

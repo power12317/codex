@@ -94,11 +94,14 @@ impl InferenceTools {
                     mode != "required" || !names.is_empty(),
                     "tool_choice requires at least one tool"
                 );
-            } else if value["type"] == "web_search" {
+            } else if matches!(
+                value["type"].as_str(),
+                Some("web_search" | "tool_search" | "image_generation")
+            ) {
                 ensure_keys(value, &["type"])?;
                 anyhow::ensure!(
-                    wire.iter().any(|tool| tool["type"] == "web_search"),
-                    "tool_choice references undefined web_search"
+                    wire.iter().any(|tool| tool["type"] == value["type"]),
+                    "tool_choice references undefined hosted/search tool"
                 );
             } else {
                 ensure_keys(value, &["type", "name", "namespace"])?;
@@ -198,6 +201,29 @@ fn parse_tool(value: &Value) -> anyhow::Result<(ToolSpec, Value)> {
             .context("input_schema is required")?;
         object.insert("parameters".into(), parameters);
         value["type"] = json!("function");
+    }
+    if value["type"] == "image_generation" {
+        let mut options = value
+            .as_object()
+            .context("image tool must be an object")?
+            .clone();
+        options.remove("type");
+        return Ok((ToolSpec::ImageGeneration { options }, value));
+    }
+    if value["type"] == "tool_search" {
+        ensure_keys(&value, &["type", "execution", "description", "parameters"])?;
+        let spec = ToolSpec::ToolSearch {
+            execution: optional::<String>(&value, "execution")?.unwrap_or_else(|| "server".into()),
+            description: optional_description(&value)?,
+            parameters: serde_json::from_value(
+                value
+                    .get("parameters")
+                    .cloned()
+                    .unwrap_or_else(|| json!({"type":"object"})),
+            )?,
+        };
+        ensure_preserved(&value, &serde_json::to_value(&spec)?)?;
+        return Ok((spec, value));
     }
     if value["type"] == "web_search" {
         ensure_keys(
