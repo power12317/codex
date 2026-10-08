@@ -56,6 +56,16 @@ dependencies = ["codex-app 0.0.0"]
                 prepare_release(self.root, version)
         self.assertEqual(before, (self.manifest.read_bytes(), self.lock.read_bytes()))
 
+    def test_stamps_implicit_path_members(self):
+        implicit = self.root / "codex-rs/app/tests/common"
+        implicit.mkdir(parents=True)
+        (implicit / "Cargo.toml").write_text('[package]\nname = "app_test_support"\nversion.workspace = true\n')
+        with self.lock.open("a") as lock:
+            lock.write('[[package]]\nname = "app_test_support"\nversion = "0.0.0"\n')
+        prepare_release(self.root, "0.161.0")
+        packages = tomllib.loads(self.lock.read_text())["package"]
+        self.assertEqual(packages[-1]["version"], "0.161.0")
+
 
 if __name__ == "__main__":
     unittest.main()

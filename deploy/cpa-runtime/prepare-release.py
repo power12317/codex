@@ -2,6 +2,7 @@
 """Stamp the Docker build copy with the official release version."""
 
 from pathlib import Path
+import os
 import re
 import tomllib
 
@@ -20,11 +21,15 @@ def prepare_release(root: Path, version: str) -> None:
     # Only workspace-inherited path packages change; registry/git packages keep
     # their exact versions, checksums and dependency resolution.
     names = set()
-    for member in workspace["members"]:
-        for directory in manifest.parent.glob(member):
-            package = tomllib.loads((directory / "Cargo.toml").read_text())["package"]
-            if package.get("version") == {"workspace": True}:
-                names.add(package["name"])
+    # Cargo also includes in-tree path dependencies as implicit members (for
+    # example app_test_support), even when absent from workspace.members.
+    for directory, children, files in os.walk(manifest.parent):
+        children[:] = [name for name in children if name not in ("target", ".git")]
+        if "Cargo.toml" not in files:
+            continue
+        package = tomllib.loads((Path(directory) / "Cargo.toml").read_text()).get("package", {})
+        if package.get("version") == {"workspace": True}:
+            names.add(package["name"])
     blocks = lockfile.read_text().split("[[package]]")
     for index in range(1, len(blocks)):
         package = tomllib.loads("[[package]]" + blocks[index])["package"][0]

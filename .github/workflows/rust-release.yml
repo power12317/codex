@@ -10,9 +10,9 @@
 
 name: rust-release
 on:
-  push:
-    tags:
-      - "rust-v*.*.*"
+  # This fork publishes rust-v tags through cpa-runtime-image.yml. Keep the
+  # upstream signing workflow available without triggering it for fork tags.
+  workflow_dispatch:
 
 env:
   CODEX_REPO_ROOT: ${{ github.workspace }}
