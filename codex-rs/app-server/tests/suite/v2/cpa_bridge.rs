@@ -317,6 +317,10 @@ async fn cpa_lossless_single_inference_and_identity_contract() -> Result<()> {
         .filter(|r| r.url.path() == "/v1/responses")
         .collect();
     assert_eq!(inference.len(), 1);
+    assert_eq!(inference[0].headers["originator"], "codex-tui");
+    let user_agent = inference[0].headers["user-agent"].to_str()?;
+    assert!(user_agent.starts_with(concat!("codex-tui/", env!("CARGO_PKG_VERSION"), " (")));
+    assert!(user_agent.ends_with(concat!("(codex-tui; ", env!("CARGO_PKG_VERSION"), ")")));
     assert_eq!(inference[0].body_json::<Value>()?, prepared);
     assert_eq!(
         (

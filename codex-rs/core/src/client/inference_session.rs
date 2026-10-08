@@ -189,7 +189,7 @@ impl InferenceSession {
             ThreadId::from_string(&mapped.thread_id)?,
             config.model_provider.clone(),
             session_source,
-            "codex_cli_rs".into(),
+            codex_login::default_client::originator().value,
             config.model_verbosity,
             /*content_item_kinds_enabled*/ false,
             /*reasoning_effort_override_enabled*/ false,

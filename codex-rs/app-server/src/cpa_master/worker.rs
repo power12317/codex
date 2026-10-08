@@ -147,7 +147,7 @@ impl Worker {
             }
         });
         let response = tokio::time::timeout(Duration::from_secs(/*secs*/ 30), worker.rpc("initialize", json!({
-            "clientInfo":{"name":"cpa-master","version":"3"},"capabilities":{"experimentalApi":true}
+            "clientInfo":{"name":"codex-tui","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}
         }))).await??;
         anyhow::ensure!(
             response.get("result").is_some(),
