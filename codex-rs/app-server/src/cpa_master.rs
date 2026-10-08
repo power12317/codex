@@ -66,17 +66,7 @@ pub async fn run() -> anyhow::Result<()> {
             }
         }
     });
-    let app = Router::new()
-        .route("/readyz", get(|| async { "ok" }))
-        .route(
-            "/cpa/v1/ws",
-            get(
-                |State(master): State<Arc<Master>>, upgrade: WebSocketUpgrade| async move {
-                    upgrade.on_upgrade(move |socket| master.connection(socket))
-                },
-            ),
-        )
-        .with_state(master.clone());
+    let app = router(master.clone());
     let shutdown_master = master.clone();
     let shutdown = async move {
         let signals = async {
@@ -120,6 +110,24 @@ pub async fn run() -> anyhow::Result<()> {
         .await;
     result?;
     Ok(())
+}
+
+fn router(master: Arc<Master>) -> Router {
+    Router::new()
+        .route("/readyz", get(|| async { "ok" }))
+        .route(
+            "/cpa/v1/ws",
+            get(
+                |State(master): State<Arc<Master>>, upgrade: WebSocketUpgrade| async move {
+                    // Axum requires concrete sizes; use the addressable maximum for this local bridge.
+                    upgrade
+                        .max_message_size(usize::MAX)
+                        .max_frame_size(usize::MAX)
+                        .on_upgrade(move |socket| master.connection(socket))
+                },
+            ),
+        )
+        .with_state(master)
 }
 
 impl Master {

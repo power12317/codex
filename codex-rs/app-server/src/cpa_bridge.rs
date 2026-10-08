@@ -474,9 +474,7 @@ impl CpaBridge {
         started.store(true, Ordering::Release);
         while let Some(chunk) = stream.bytes.next().await {
             let bytes = chunk.map_err(|error| api_failure(ApiError::Transport(error)))?;
-            let translated = response
-                .push(&bytes)
-                .map_err(|error| failure(502, &error.to_string()))?;
+            let translated = response.push(&bytes);
             self.send_body(id, &params.request_id, &translated).await?;
         }
         self.send_body(id, &params.request_id, &response.finish())

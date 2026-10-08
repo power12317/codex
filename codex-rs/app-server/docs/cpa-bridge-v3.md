@@ -36,6 +36,9 @@ persistent CODEX_HOME and reads/writes the shared original credential file.
 The default endpoint is `ws://127.0.0.1:38317/cpa/v1/ws`. No bridge key or
 Authorization header is required. `initialize` / `initialized` remain.
 
+The local bridge imposes no WebSocket frame or message size limit, including
+complete inference requests and full upstream diagnostic bodies.
+
 `cpa/capabilities/read {}` and `cpa/credential/reload {credentialId?: string}`
 return master capabilities:
 
@@ -163,9 +166,9 @@ be restored; values already replaced inside a client cannot be recovered here.
 SSE frames are buffered until their data can be examined. Unchanged events retain
 their exact bytes, while modified JSON data is reserialized with non-data lines
 preserved. Leading heartbeat/comment/event/id lines are forwarded immediately.
-JSON HTTP responses are projected at EOF. Each pending SSE event or JSON response
-input buffer is limited to 16 MiB; exceeding it fails the stream. Output IPC chunks
-are at most 64 KiB. These transient buffers are not persisted conversation storage.
+JSON HTTP responses are projected at EOF. Pending SSE events and JSON responses
+have no size limit. Output IPC chunks are at most 64 KiB without limiting the
+complete response. These transient buffers are not persisted conversation storage.
 
 ## OAuth
 

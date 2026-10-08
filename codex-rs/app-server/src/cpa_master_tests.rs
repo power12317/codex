@@ -45,3 +45,67 @@ fn scan_uses_relative_credential_ids_and_effective_flags() -> anyhow::Result<()>
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn local_bridge_accepts_messages_larger_than_default_limits() -> anyhow::Result<()> {
+    use tokio_tungstenite::tungstenite::Message as ClientMessage;
+
+    let directory = tempfile::TempDir::new()?;
+    let master = Arc::new(Master {
+        shutdown: CancellationToken::new(),
+        root: directory.path().to_owned(),
+        state: directory.path().to_owned(),
+        workers: Mutex::default(),
+        logins: Mutex::default(),
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let app = router(master);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = shutdown_rx.await;
+            })
+            .await
+    });
+    let result: anyhow::Result<()> = async {
+        let (mut socket, _) =
+            tokio_tungstenite::connect_async(format!("ws://{address}/cpa/v1/ws")).await?;
+        let padding = "x".repeat((64 << 20) + 1);
+        socket
+            .send(ClientMessage::Text(
+                json!({"id":1,"method":"initialize","params":{"padding":padding}})
+                    .to_string()
+                    .into(),
+            ))
+            .await?;
+        let response = socket
+            .next()
+            .await
+            .context("large RPC response missing")??;
+        let response: Value = serde_json::from_str(response.to_text()?)?;
+        assert_eq!(response["id"], json!(1));
+        assert!(response.get("result").is_some());
+        socket
+            .send(ClientMessage::Text(
+                json!({"id":2,"method":"cpa/capabilities/read","params":{}})
+                    .to_string()
+                    .into(),
+            ))
+            .await?;
+        let response = socket
+            .next()
+            .await
+            .context("follow-up RPC response missing")??;
+        let response: Value = serde_json::from_str(response.to_text()?)?;
+        assert_eq!(response["id"], json!(2));
+        assert_eq!(response["result"]["protocolVersion"], json!(3));
+        socket.close(None).await?;
+        Ok(())
+    }
+    .await;
+    let _ = shutdown_tx.send(());
+    server.await??;
+    result
+}

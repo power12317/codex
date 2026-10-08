@@ -271,9 +271,9 @@ streaming UTF-8 decoder and SSE parser, or write decoded bytes directly to an
 output stream. Do not concatenate base64 text before decoding.
 
 Unchanged SSE events preserve their bytes; identity-bearing events may have
-their JSON reserialized. IPC body chunks are at most 64 KiB after decoding. The
-pending SSE-event/JSON-response input buffer has a 16 MiB limit; exceeding it
-fails the stream. Heartbeat/comment lines before event data are forwarded promptly.
+their JSON reserialized. IPC body chunks are at most 64 KiB after decoding without
+limiting the complete response. The local WebSocket and pending SSE-event/JSON-response
+input buffers have no size limit. Heartbeat/comment lines before event data are forwarded promptly.
 
 `cpa/inference/completed` means HTTP body EOF, not model-level success. Inspect
 Responses events such as `response.completed` or `response.failed` yourself.

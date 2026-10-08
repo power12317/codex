@@ -1,8 +1,6 @@
-//! Bounded SSE framing for identity translation; unchanged events retain their exact bytes.
+//! SSE framing for identity translation; unchanged events retain their exact bytes.
 use super::identity_response::IdentityResponse;
 use serde_json::Value;
-
-const MAX_EVENT_BYTES: usize = 16 * 1024 * 1024;
 
 pub(super) struct ResponseStream {
     identities: IdentityResponse,
@@ -23,7 +21,7 @@ impl ResponseStream {
         }
     }
 
-    pub(super) fn push(&mut self, bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+    pub(super) fn push(&mut self, bytes: &[u8]) -> Vec<u8> {
         let mut output = Vec::new();
         for part in bytes.chunks(64 * 1024) {
             self.pending.extend_from_slice(part);
@@ -43,10 +41,6 @@ impl ResponseStream {
                         } else {
                             1
                         };
-                    anyhow::ensure!(
-                        end <= MAX_EVENT_BYTES,
-                        "Upstream SSE event exceeds identity mapping buffer limit"
-                    );
                     if self.line_start == self.scan {
                         output.extend(self.event(&self.pending[..end]));
                         self.pending.drain(..end);
@@ -67,12 +61,8 @@ impl ResponseStream {
                     }
                 }
             }
-            anyhow::ensure!(
-                self.pending.len() <= MAX_EVENT_BYTES,
-                "Upstream response exceeds identity mapping buffer limit"
-            );
         }
-        Ok(output)
+        output
     }
 
     pub(super) fn finish(self) -> Vec<u8> {
