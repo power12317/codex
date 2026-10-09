@@ -138,6 +138,7 @@ impl CpaBridge {
             json!({
                 "source": codex_core::InferenceIdentity::from_request(&params.request),
                 "rpcSessionId": params.session_id,
+                "operation": params.operation, "imageApi": params.image_api,
                 "codexHome": self.config.codex_home,
             }),
         );
@@ -312,10 +313,19 @@ impl CpaBridge {
             ));
         }
         let revision = *self.auth.auth_change_receiver().borrow();
-        let resolved = model_provider
-            .responses_api_provider(&self.config.workspace_routing_context())
-            .await
-            .map_err(|_| failure(/*status*/ 502, "Unable to resolve managed provider"))?;
+        let image_endpoint = params.image_api == Some(CpaImageApi::Images);
+        let mut provider = if image_endpoint {
+            model_provider
+                .api_provider()
+                .await
+                .map_err(|_| failure(502, "Unable to resolve managed image provider"))?
+        } else {
+            model_provider
+                .responses_api_provider(&self.config.workspace_routing_context())
+                .await
+                .map_err(|_| failure(502, "Unable to resolve managed provider"))?
+                .provider
+        };
         if *self.auth.auth_change_receiver().borrow() != revision {
             return Err(failure(
                 /*status*/ 409,
@@ -323,7 +333,6 @@ impl CpaBridge {
             ));
         }
         self.bound_auth()?;
-        let mut provider = resolved.provider;
         // A failed stream must never cause another inference attempt.
         // RetryPolicy counts retries after the initial attempt. Zero means one POST.
         provider.retry.max_attempts = 0;
@@ -333,7 +342,11 @@ impl CpaBridge {
             .without_redirects()
             .build_respecting_outbound_proxy_policy(
                 &factory,
-                &provider.url_for_path("responses"),
+                &provider.url_for_path(if image_endpoint {
+                    &params.operation
+                } else {
+                    "responses"
+                }),
                 ClientRouteClass::Api,
             )
             .map_err(|_| {
@@ -342,6 +355,47 @@ impl CpaBridge {
                     "Unable to construct managed HTTP client",
                 )
             })?;
+        let transport = upstream::UpstreamTransport {
+            inner: ReqwestTransport::from_http_client(client),
+            factory,
+            outgoing: self.outgoing.clone(),
+            connection_id: id.connection_id,
+            request_id: params.request_id.clone(),
+            credential_id: params.credential_id.clone(),
+        };
+        if image_endpoint {
+            let operation = match params.operation.as_str() {
+                "images/generations" => codex_api::ImageOperation::Generate,
+                "images/edits" => codex_api::ImageOperation::Edit,
+                _ => unreachable!("validated image operation"),
+            };
+            let request: codex_api::ImageInferenceRequest =
+                serde_json::from_value(Value::Object(params.request.clone())).map_err(|error| {
+                    failure(400, &format!("Invalid native image request: {error}"))
+                })?;
+            let mapping = session.mapping();
+            let mut headers =
+                codex_api::build_session_headers(Some(mapping.session_id), Some(mapping.thread_id));
+            if let Some(turn_id) = mapping.turn_id {
+                headers.insert(
+                    "x-codex-image-turn-id",
+                    turn_id
+                        .parse()
+                        .map_err(|_| failure(400, "Invalid image turn id"))?,
+                );
+            }
+            return codex_api::ImagesClient::new(
+                transport,
+                provider,
+                auth_provider_from_auth(&auth),
+            )
+            .inference(operation, &request, headers)
+            .await
+            .map_err(|error| match error {
+                ApiError::InvalidRequest { message } => failure(400, &message),
+                error => api_failure(error),
+            });
+        }
         let model = params
             .request
             .get("model")
@@ -372,21 +426,10 @@ impl CpaBridge {
                 "turnStateSent": options.extra_headers.get("x-codex-turn-state").and_then(|value| value.to_str().ok()),
             }),
         );
-        ResponsesClient::new(
-            upstream::UpstreamTransport {
-                inner: ReqwestTransport::from_http_client(client),
-                factory,
-                outgoing: self.outgoing.clone(),
-                connection_id: id.connection_id,
-                request_id: params.request_id.clone(),
-                credential_id: params.credential_id.clone(),
-            },
-            provider,
-            auth_provider_from_auth(&auth),
-        )
-        .stream_prepared_body(body, options)
-        .await
-        .map_err(api_failure)
+        ResponsesClient::new(transport, provider, auth_provider_from_auth(&auth))
+            .stream_prepared_body(body, options)
+            .await
+            .map_err(api_failure)
     }
 
     async fn run(
@@ -432,6 +475,7 @@ impl CpaBridge {
             "retry-after",
             "openai-model",
             "openai-processing-ms",
+            "x-codex-imagegen-request-id",
             "session-id",
             "thread-id",
             "x-codex-parent-thread-id",
@@ -474,7 +518,11 @@ impl CpaBridge {
         started.store(true, Ordering::Release);
         while let Some(chunk) = stream.bytes.next().await {
             let bytes = chunk.map_err(|error| api_failure(ApiError::Transport(error)))?;
-            let translated = response.push(&bytes);
+            let translated = if params.image_api.is_some() {
+                bytes.to_vec()
+            } else {
+                response.push(&bytes)
+            };
             self.send_body(id, &params.request_id, &translated).await?;
         }
         self.send_body(id, &params.request_id, &response.finish())
@@ -517,7 +565,11 @@ pub(crate) fn capabilities() -> CpaCapabilitiesReadResponse {
         raw_body: true,
         response_identity_mapping: true,
         execution_mode: "inference-only".into(),
-        operations: vec!["responses".into()],
+        operations: vec![
+            "responses".into(),
+            "images/generations".into(),
+            "images/edits".into(),
+        ],
     }
 }
 
@@ -574,11 +626,23 @@ fn validate(params: &CpaInferenceStartParams) -> BridgeResult<()> {
     if params.credential_id.is_empty() || params.credential_id.len() > 4096 {
         return Err(failure(/*status*/ 400, "Invalid credentialId"));
     }
+    if matches!(
+        params.operation.as_str(),
+        "images/generations" | "images/edits"
+    ) {
+        if params.image_api.is_none() {
+            return Err(failure(400, "imageApi is required for image operations"));
+        }
+        return Ok(());
+    }
     if params.operation != "responses" {
         return Err(failure(
             /*status*/ 400,
-            "Unsupported operation; only responses is available",
+            "Unsupported operation; supported operations are responses, images/generations and images/edits",
         ));
+    }
+    if params.image_api.is_some() {
+        return Err(failure(400, "imageApi is only valid for image operations"));
     }
     let r = &params.request;
     if r.contains_key("previous_response_id")

@@ -1146,6 +1146,11 @@ class ConversationTextRole(Enum):
     assistant = "assistant"
 
 
+class CpaImageApi(Enum):
+    images = "images"
+    responses = "responses"
+
+
 class CpaInferenceBodyNotification(BaseModel):
     model_config = ConfigDict(
         extra="forbid",

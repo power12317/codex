@@ -85,7 +85,7 @@ async fn cpa_hosted_tools_use_native_request_construction(lite: bool) -> Result<
     for (wire, body) in received.iter().zip(bodies) {
         assert_eq!(wire.body_json::<Value>()?, body);
         assert_eq!(wire.headers["authorization"], "Bearer fake-cpa-access");
-        assert_eq!(wire.headers["originator"], "codex_cli_rs");
+        assert_eq!(wire.headers["originator"], "codex-tui");
     }
     Ok(())
 }

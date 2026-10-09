@@ -1,5 +1,73 @@
 # Codex Server inference validation record
 
+## 2026-10-09 standalone image operations and native normalization correction
+
+Audit and fetched main baseline: `1ddf40146790e805a9b3a488ffde36364b17b29c`.
+Image operations and the optional `imageApi` enum remain on the v3 bridge.
+Worker-owned authentication, provider/network selection, mask/multiple images,
+raw JSON/SSE output, cancellation and transport EOF semantics are retained.
+
+The initial image-specific Responses builder incorrectly trimmed and replaced
+native output using the caller's original field presence. That implementation
+and its exports were removed. The three existing core files were restored from
+Git HEAD; both ordinary and image Responses now call the unchanged
+`prepare_inference_request` pipeline. The old regression requiring absent
+message types and shorthand content to survive native construction was replaced
+with assertions that worker normalization determines actual upstream HTTP.
+
+Direct Images input is rebuilt with the existing native generation/edit DTOs.
+The missing/null/value mirror and repeated-scalar bypass were removed. Required
+model/prompt and edit images are validated, native enums/reference serialization
+apply, and optional nulls are omitted. Mask, streaming/output options and business
+extensions remain supported. Ordered duplicate image data URLs remain intact.
+
+Validation of the corrected implementation:
+
+- CPA unit and real master/worker integration suite: **70/70 passed** with
+  `just test -p codex-app-server --lib --test all cpa_`.
+- Native Images client/request tests and complete protocol library suite:
+  **327/327 passed**, including JSON/TypeScript schema and precomputed export
+  consistency. The protocol representation did not change during this correction.
+- Ordinary and Lite image Responses regressions inspect the actual upstream HTTP
+  body: missing message types and shorthand text are normalized, instructions
+  become developer input, historical item IDs are corrected, native stream/store
+  defaults apply, Lite disables parallel tools, and native identity replaces
+  caller identity. No caller-field pruning runs after native construction.
+- Generation/edit and Images/Responses JSON/SSE matrices retain valid image
+  options, duplicate images, mask and business extensions. Native required-field
+  and scalar-type failures do not reach upstream model HTTP.
+- Partial-image cancellation closes the HTTP connection; truncated chunked
+  transfer emits an error instead of completion. Upstream failures do not replay.
+- Existing ordinary Responses, hosted image tools, summary/compaction, identity
+  and UTC/Singapore/Tokyo time-context tests passed.
+- `cargo build --locked -p codex-app-server --bin codex-app-server` passed.
+  Strict production-library Clippy passed for API, core, app-server and protocol
+  with `-D warnings`. Scoped Rust formatting, API Markdown formatting,
+  documentation examples and diff whitespace checks passed.
+- CPA reran `TestCodexRuntimeImagesRealWorker` with Go `-race` against the
+  corrected binary below. Native-normalization and native-stream cases passed,
+  along with six generation/edit JSON/multipart/streaming combinations and six
+  public HTTP combinations. The basic image cases recorded **CPA model HTTP = 0,
+  worker model HTTP = 1**. Ordinary built-in images, summary/compaction, upstream
+  failures, cancellation and mixed-pool refusal to retry locally also passed.
+  Evidence: `/tmp/cpa-worker-native-normalization-race.log`. CPA separately
+  reported its five affected package suites and required build passed.
+
+The corrected macOS arm64 development binary is
+`/private/tmp/codex-images-runtime-20261009/codex-app-server-native`, SHA-256
+`cb75e72470d81d959ed05f76d498fd626d2b537dd6c288b043090551200c6edd`.
+Evidence logs use `/private/tmp/codex-images-native-*.log`; the artifact manifest
+is `/private/tmp/codex-images-runtime-20261009/native-validation.json`.
+Earlier results for `codex-app-server-final` validate superseded behavior and
+must not be used as evidence for this correction. HTTP services and credentials
+in these tests are local fixtures; live model and Linux container execution are
+not covered by this local build.
+
+No production client identity/User-Agent, deployment or CI settings were changed.
+No local tool execution, agent session, automatic compaction or new capacity limit
+was introduced. Both projects must negotiate the image capabilities; an older
+worker remains unsupported and must not trigger direct upstream fallback.
+
 ## 2026-10-07 native hosted-tool compatibility
 
 Baseline: `3628694b0`. The inference tool parser now accepts hosted

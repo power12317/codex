@@ -7,6 +7,10 @@ mod hierarchy_tests;
 mod home_tests;
 #[path = "cpa_bridge/hosted_tools_tests.rs"]
 mod hosted_tools_tests;
+#[path = "cpa_bridge/image_stream_tests.rs"]
+mod image_stream_tests;
+#[path = "cpa_bridge/images_tests.rs"]
+mod images_tests;
 #[path = "cpa_bridge/oailb_tests.rs"]
 mod oailb_tests;
 #[path = "cpa_bridge/parser_tests.rs"]

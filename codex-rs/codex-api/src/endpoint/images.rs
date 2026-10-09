@@ -47,6 +47,33 @@ impl ImageRequestError {
 }
 
 impl<T: HttpTransport> ImagesClient<T> {
+    /// Serialize a native single-operation image request and transfer its HTTP body.
+    /// Both JSON and image SSE are returned as bytes, without a Responses event loop.
+    pub async fn inference(
+        &self,
+        operation: crate::ImageOperation,
+        request: &crate::ImageInferenceRequest,
+        headers: HeaderMap,
+    ) -> Result<codex_client::StreamResponse, ApiError> {
+        let native = request.build(operation)?;
+        let body = codex_client::EncodedJsonBody::encode(&native)
+            .map_err(|error| ApiError::Stream(error.to_string()))?;
+        self.session
+            .stream_encoded_json_with(
+                Method::POST,
+                operation.path(),
+                headers,
+                Some(body),
+                |request| {
+                    request.headers.insert(
+                        http::header::ACCEPT,
+                        http::HeaderValue::from_static("application/json, text/event-stream"),
+                    );
+                },
+            )
+            .await
+    }
+
     pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),

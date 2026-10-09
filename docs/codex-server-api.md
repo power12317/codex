@@ -75,7 +75,7 @@ shape (version strings below are illustrative):
     "executionMode": "inference-only",
     "rawBody": true,
     "responseIdentityMapping": true,
-    "operations": ["responses"]
+    "operations": ["responses", "images/generations", "images/edits"]
   }
 }
 ```
@@ -181,12 +181,12 @@ name with one available to the account:
 | RPC `id`       | Correlates this control reply. It is distinct from the inference `requestId`.                                                                                                              |
 | `requestId`    | Nonempty string, at most 256 bytes, without control characters. Use a fresh UUID for each inference. Active IDs must be unique within the credential worker, including across connections. |
 | `credentialId` | Existing enabled relative credential filename, at most 4096 bytes.                                                                                                                         |
-| `operation`    | Exactly `responses`.                                                                                                                                                                       |
+| `operation`    | `responses`, `images/generations` or `images/edits`.                                                                                                                                       |
 | `sourceFormat` | Nonempty label, at most 256 bytes, without control characters; `openai-response` is used here. It does not convert Chat/Claude envelopes.                                                  |
 | `sessionId`    | Nonempty caller isolation scope, at most 256 bytes, without control characters. Keep it stable across requests belonging to the same logical scope.                                        |
-| `request`      | Responses-style object with a model string and `stream: true`; input can be text or a supported Responses item array.                                                                      |
+| `request`      | Business JSON for the selected operation. Ordinary Responses requires a model string and `stream: true`; image operations use the contract below.                                          |
 
-Pass all required history in `request.input`. `previous_response_id`,
+For `operation: "responses"`, pass all required history in `request.input`. `previous_response_id`,
 `conversation` and `generate` are rejected even if null. If supplied, `store`
 and `background` must be exactly `false`. Nonstreaming requests are rejected;
 a client needing a final JSON result can collect and parse the SSE stream itself.
@@ -199,6 +199,63 @@ their call IDs and send results plus required history in subsequent requests.
 There is no local tool loop. Native web search and image generation run at the
 upstream service. Tool search retains its declared client/server execution mode;
 the worker does not execute client tools.
+
+### Standalone image generation and editing
+
+Before starting an image request, require its exact operation in
+`capabilities.operations`: `images/generations` or `images/edits`. A server that
+advertises only `responses` cannot execute these operations; return an explicit
+unsupported-operation error instead of sending the request directly upstream.
+
+Image operations also require `imageApi: "images"` or `imageApi: "responses"`
+beside `request` in the RPC envelope. This selects the native business request
+representation. It is not valid on the ordinary `responses` operation.
+
+- `images` uses native image fields and the corresponding `/images/generations`
+  or `/images/edits` endpoint.
+- `responses` uses native Responses input and tools, including the hosted
+  `image_generation` tool, and the `/responses` endpoint. The calling application
+  continues to convert those events into its image API response.
+
+The caller completes protocol conversion, model mapping and its payload rules
+before sending `request`. The worker then performs native construction and owns
+the final upstream representation. Images represented as Responses use the same
+`prepare_inference_request` pipeline as ordinary Responses, including message
+normalization, native defaults, model-selected Lite layout, time context and
+worker identity. For example, missing message `type` becomes `message`, string
+content becomes `input_text` content, and native `stream: true` / `store: false`
+are not overwritten by the caller's raw fields. Native output is never trimmed
+back to the set of fields supplied by the caller.
+
+Direct Images requests are rebuilt with `ImageGenerationRequest` or
+`ImageEditRequest`. Model and prompt are required strings; edits also require
+`images`. Native enums validate quality/background, image references are
+serialized through `ImageReference`, and optional nulls are omitted. Standalone
+mask, stream and output options extend these DTOs. Invalid native types produce
+HTTP 400. Authentication, transport headers and worker identity remain locally
+managed. No URL, raw HTTP header block or caller credential is accepted as a
+transport override.
+
+Multipart editing is converted by the caller before RPC dispatch: images become
+ordered `images: [{"image_url":"data:image/png;base64,..."}]` entries and mask
+becomes `mask: {"image_url":"data:image/png;base64,..."}`. Repeated form fields use
+JSON arrays during caller conversion; a field whose native type is scalar must
+still pass native validation. The RPC carries the converted business JSON and
+no multipart boundary or temporary filename. The worker preserves the supplied image order, duplicate entries and
+base64 content through native JSON serialization.
+
+Image responses, including partial-image SSE events and JSON results, use the
+existing `bodyBase64` channel without identity rewriting of image contents.
+`cpa/inference/completed` indicates transport EOF; it does not require a
+`response.completed` event. The caller interprets image events, or Responses
+terminal events when `imageApi` is `responses`. Transport failures and cancellation
+produce `cpa/inference/error`, including after a partial image was transferred.
+The same `requestId` correlates the RPC, worker diagnostics and upstream exchange.
+
+The protocol remains v3. Both sides need image-aware code and must negotiate the
+operation before sending the new `imageApi` field. Independent
+`responses/compact` remains unsupported; ordinary Responses summary prompts,
+`compaction_trigger` and `compaction` items use the existing Responses path.
 
 ### Session, thread and turn identities
 

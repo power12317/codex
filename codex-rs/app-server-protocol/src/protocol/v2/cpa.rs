@@ -38,7 +38,18 @@ pub struct CpaInferenceStartParams {
     pub operation: String,
     pub source_format: String,
     pub session_id: String,
+    /// Required for image operations: the business payload uses Images or Responses types.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub image_api: Option<CpaImageApi>,
     pub request: serde_json::Map<String, Value>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum CpaImageApi {
+    Images,
+    Responses,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

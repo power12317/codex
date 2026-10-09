@@ -43,7 +43,7 @@ complete inference requests and full upstream diagnostic bodies.
 return master capabilities:
 
 ```json
-{"protocolVersion":3,"runtimeVersion":"...","upstreamRevision":"...","executionMode":"inference-only","operations":["responses"],"rawBody":true,"responseIdentityMapping":true,"manualOAuth":true,"upstreamLogs":true,"upstreamBodyLogs":true}
+{"protocolVersion":3,"runtimeVersion":"...","upstreamRevision":"...","executionMode":"inference-only","operations":["responses","images/generations","images/edits"],"rawBody":true,"responseIdentityMapping":true,"manualOAuth":true,"upstreamLogs":true,"upstreamBodyLogs":true}
 ```
 
 Reload scans one credential or the directory and waits for the corresponding
@@ -53,7 +53,7 @@ selection and effective flags; the master only applies them.
 ## Inference
 
 `cpa/inference/start` takes
-`{requestId, credentialId, operation, sourceFormat, sessionId, request}` and returns
+`{requestId, credentialId, operation, sourceFormat, sessionId, imageApi?, request}` and returns
 `{requestId, statusCode, headers}`. There is no `accountId` parameter. The worker
 maps the semantic request into the native Codex request builder, sends once
 through the native auth/provider transport, and does not start an agent/tool loop.
@@ -135,6 +135,44 @@ atomic under the worker's short-lived mutex. The first valid upstream
 `x-codex-turn-state` from HTTP headers or native `response.metadata` is retained.
 No function call is executed.
 
+## Standalone image operations
+
+Capabilities additionally advertise `images/generations` and `images/edits`.
+These operations require the optional envelope field `imageApi`, with exactly
+`images` or `responses`; ordinary `responses` rejects this field. Older v3 workers
+must be treated as unsupported when the required operation is absent. There is
+no direct-upstream fallback and no independent `responses/compact` operation.
+
+`imageApi: "images"` parses typed image input and rebuilds it with the existing
+`ImageGenerationRequest` / `ImageEditRequest` DTOs before calling `ImagesClient`
+with the worker's provider, authentication and network client. Model and prompt
+are required; edits require images. Native quality/background enums and image
+references determine the serialized fields, and optional nulls are omitted.
+Standalone mask, streaming and output options supplement the native DTOs.
+The operation chooses the fixed generation/edit endpoint.
+
+`imageApi: "responses"` uses the existing `prepare_inference_request` pipeline
+without an image-specific override. Worker normalization owns the final request:
+it restores message types, expands shorthand text, applies native defaults,
+normalizes historical IDs, rebuilds identity/time metadata and selects the
+model's ordinary or Lite layout. The caller's field presence never trims or
+overwrites the native result. CPA applies its payload rules before dispatch;
+those rules do not bypass subsequent worker normalization.
+
+CPA converts multipart image edits to JSON before its payload rules: ordered
+`images` entries and `mask` carry data URLs, and repeated fields carry arrays.
+The worker does not read caller paths or accept raw multipart/HTTP requests.
+Image order, duplicate images and binary content are preserved by native image
+references. Scalar native fields reject arrays instead of blindly forwarding
+invalid multipart values. Ordinary Responses construction remains unchanged.
+
+Both image representations return original JSON/SSE bytes through `bodyBase64`,
+with EOF reported by `completed`. Image events do not need a Responses terminal
+event; the caller applies the parser appropriate to `imageApi`. Cancellation
+and transport errors fail the stream even after partial output. Auth recovery,
+request IDs, upstream diagnostics and credential-worker routing use the existing
+bridge lifecycle. No local image execution or agent loop is introduced.
+
 ## Response identity projection
 
 `rawBody: true` identifies the existing `bodyBase64` byte-stream transport, not a
@@ -183,6 +221,9 @@ CPA conventionally uses a UUID filename for new accounts.
 There is no separate independently refreshed auth.json copy.
 
 ## Native request mapping
+
+This Responses construction also applies to standalone image operations with
+`imageApi: "responses"`. Direct Images use the native image DTOs described above.
 
 The child uses the retained native model catalog, `ModelClient` prompt/request
 builder, and request options. Tool parsing has one owner in the core CPA adapter;
